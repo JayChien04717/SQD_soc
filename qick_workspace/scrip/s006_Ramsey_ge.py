@@ -1,0 +1,293 @@
+# ----- Qick package ----- #
+from qick import *
+from qick.asm_v2 import AveragerProgramV2
+
+# ----- Library ----- #
+import matplotlib.pyplot as plt
+import numpy as np
+
+# ----- User Library ----- #
+from ..system_cfg import *
+from ..system_cfg import DATA_PATH
+from ..system_tool import get_next_filename_labber, hdf5_generator
+from ..fitting import decaysin, fitdecaysin, expfunc, fitexp
+from ..module_fitzcu import T2fring_analyze
+from ..yamltool import yml_comment
+from ..plotter.liveplot import liveplotfun
+from ..plotter.plot_utils import plot_final
+from ..yamltool import yml_comment
+##################
+# Define Program #
+##################
+
+
+class RamseyProgram(AveragerProgramV2):
+    def _initialize(self, cfg):
+        ro_ch = cfg["ro_ch"]
+        res_ch = cfg["res_ch"]
+        qubit_ch = cfg["qubit_ch"]
+
+        self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
+        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(
+                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
+            )
+        else:
+            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+        # pynq configured
+        # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
+
+        # tproc configured
+        self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
+        self.add_readoutconfig(
+            ch=ro_ch, name="myro", freq=cfg["res_freq_ge"], gen_ch=res_ch
+        )
+
+        self.add_loop("waitloop", cfg["steps"])
+
+        self.add_gauss(
+            ch=res_ch,
+            name="readout",
+            sigma=cfg["res_sigma"],
+            length=5 * cfg["res_sigma"],
+            even_length=True,
+        )
+        self.add_pulse(
+            ch=res_ch,
+            name="res_pulse",
+            ro_ch=ro_ch,
+            style="flat_top",
+            envelope="readout",
+            length=cfg["res_length"],
+            freq=cfg["res_freq_ge"],
+            phase=cfg["res_phase"],
+            gain=cfg["res_gain_ge"],
+        )
+
+        self.add_gauss(
+            ch=qubit_ch,
+            name="ramp",
+            sigma=cfg["sigma"],
+            length=cfg["sigma"] * 5,
+            even_length=True,
+        )
+        if cfg["qubit_ge_pulse_style"] == "arb":
+            self.add_pulse(
+                ch=qubit_ch,
+                name="qubit_pulse1",
+                ro_ch=ro_ch,
+                style="arb",
+                envelope="ramp",
+                freq=cfg["qubit_freq_ge"],
+                phase=cfg["qubit_phase"],
+                gain=cfg["qubit_pi2_gain_ge"],
+            )
+
+            self.add_pulse(
+                ch=qubit_ch,
+                name="qubit_pulse2",
+                ro_ch=ro_ch,
+                style="arb",
+                envelope="ramp",
+                freq=cfg["qubit_freq_ge"],
+                phase=cfg["qubit_phase"] + cfg["wait_time"] * 360 * cfg["ramsey_freq"],
+                gain=cfg["qubit_pi2_gain_ge"],
+            )
+        elif cfg["qubit_ge_pulse_style"] == "flat_top":
+            if cfg["qubit_flat_top_length_ge"] is None:
+                raise ValueError("Please set qubit_flat_top_length_ge in config")
+            self.add_pulse(
+                ch=qubit_ch,
+                name="qubit_pulse1",
+                ro_ch=ro_ch,
+                style="flat_top",
+                envelope="ramp",
+                freq=cfg["qubit_freq_ge"],
+                phase=cfg["qubit_phase"],
+                gain=cfg["qubit_pi2_gain_ge"],
+                length=cfg["qubit_flat_top_length_ge"],
+            )
+
+            self.add_pulse(
+                ch=qubit_ch,
+                name="qubit_pulse2",
+                ro_ch=ro_ch,
+                style="flat_top",
+                envelope="ramp",
+                freq=cfg["qubit_freq_ge"],
+                phase=cfg["qubit_phase"] + cfg["wait_time"] * 360 * cfg["ramsey_freq"],
+                gain=cfg["qubit_pi2_gain_ge"],
+                length=cfg["qubit_flat_top_length_ge"],
+            )
+
+    def apply_cool(self, cfg):
+        cool_ch1 = cfg["cool_ch1"]
+        cool_ch2 = cfg["cool_ch2"]
+        if self.soccfg["gens"][cool_ch1]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(
+                ch=cool_ch1, nqz=cfg["nqz_cool_ch1"], mixer_freq=cfg["cool_mixer1"]
+            )
+        else:
+            self.declare_gen(ch=cool_ch1, nqz=cfg["nqz_cool_ch1"])
+
+        if self.soccfg["gens"][cool_ch2]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(
+                ch=cool_ch2, nqz=cfg["nqz_cool_ch2"], mixer_freq=cfg["cool_mixer2"]
+            )
+        else:
+            self.declare_gen(ch=cool_ch2, nqz=cfg["nqz_cool_ch2"])
+
+        self.add_gauss(
+            ch=cool_ch1,
+            name="cooling1",
+            sigma=cfg["res_sigma"],
+            length=cfg["res_sigma"] * 5,
+            even_length=True,
+        )
+        self.add_pulse(
+            ch=cool_ch1,
+            name="cool_pulse1",
+            envelope="cooling1",
+            style="flat_top",
+            length=cfg["cool_length"],
+            freq=cfg["cool_freq_1"],
+            phase=0,
+            gain=cfg["cool_gain_1"],
+        )
+        self.add_gauss(
+            ch=cool_ch2,
+            name="cooling2",
+            sigma=cfg["res_sigma"],
+            length=cfg["res_sigma"] * 5,
+            even_length=True,
+        )
+        self.add_pulse(
+            ch=cool_ch2,
+            name="cool_pulse2",
+            envelope="cooling2",
+            style="flat_top",
+            length=cfg["cool_length"],
+            freq=cfg["cool_freq_2"],
+            phase=0,
+            gain=cfg["cool_gain_2"],
+        )
+
+    def _body(self, cfg):
+        self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
+        if cfg["cooling"] is True:
+            self.apply_cool(cfg)
+            self.pulse(ch=self.cfg["cool_ch1"], name="cool_pulse1", t=0)
+            self.pulse(ch=self.cfg["cool_ch2"], name="cool_pulse2", t=0)
+            self.delay_auto(0.5, tag="Ring down")
+
+        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_pulse1", t=0)
+        self.delay_auto(cfg["wait_time"] + 0.01, tag="wait")
+        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_pulse2", t=0)
+        self.delay_auto(0.01)
+        self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
+        self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
+
+
+class Ramsey:
+    def __init__(self, soc, soccfg, config):
+        self.soc = soc
+        self.soccfg = soccfg
+        self.cfg = config
+
+    def run(self, py_avg, liveplot=False):
+        if liveplot:
+            self.liveplot(py_avg)
+        else:
+            prog = RamseyProgram(
+                self.soccfg,
+                reps=self.cfg["reps"],
+                final_delay=self.cfg["relax_delay"],
+                cfg=self.cfg,
+            )
+            self.iq_list = prog.acquire(self.soc, rounds=py_avg, progress=True)
+            self.iqdata = self.iq_list[0][0].dot([1, 1j])
+            self.delay_times = prog.get_time_param("wait", "t", as_array=True)
+
+    def plot(self):
+        self.t2r = T2fring_analyze(self.delay_times, self.iqdata, prefix="Ramsey")
+
+    def correct_detune(self):
+        if abs(self.t2r[1] - self.cfg["ramsey_freq"]) > 0.005:
+            self.cfg["qubit_freq_ge"] = self.cfg["qubit_freq_ge"] - round(
+                (self.t2r[1] - self.cfg["ramsey_freq"]), 2
+            )
+            print(f"over detune {round((self.t2r[1] - self.cfg['ramsey_freq']), 5)}MHz")
+            return round(self.cfg["qubit_freq_ge"], 5)
+        else:
+            print("Detune < 5kHz")
+            return self.cfg["qubit_freq_ge"]
+
+    def liveplot(self, py_avg):
+        prog = RamseyProgram(
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
+        )
+        self.delay_times = prog.get_time_param("wait", "t", as_array=True)
+        self.iqdata, interrupted, avg_count = liveplotfun(
+            prog=prog,
+            soc=self.soc,
+            py_avg=py_avg,
+            x_axis_vals=self.delay_times,
+            y_axis_vals=None,
+            x_label="Ramsey Times (us)",
+            y_label="ADC Units",
+            title_prefix="Qubit Ramsey ge",
+            yoko_inst_addr=None,
+            show_final_plot=False,
+        )
+
+        if self.iqdata is None:
+            print("No data was acquired.")
+            return None
+        if interrupted:
+            print(
+                f"Experiment interrupted at {avg_count} averages. "
+                "Fit is based on partial data."
+            )
+
+        ### Final plot ###
+        if self.cfg["ramsey_freq"] != 0:
+            self.fit_params, error, fig = plot_final(
+                self.delay_times, self.iqdata, "Ramsey Times", fitdecaysin, decaysin
+            )
+            fig.suptitle(
+                f"T2 Ramsey = {self.fit_params[3]:.2f}$\mu s, detune = {self.fit_params[1]:.5f}MHz \pm {(error[1]) * 1e3:.3f}kHz$",
+                fontsize=15,
+            )
+
+        elif self.cfg["ramsey_freq"] == 0:
+            self.fit_params, error, fig = plot_final(
+                self.delay_times, self.iqdata, "Ramsey Times", fitexp, expfunc
+            )
+            fig.suptitle(
+                f"T2 Ramsey = {self.fit_params[2]:.2f}$\mu s$",
+                fontsize=15,
+            )
+        fig.tight_layout()
+
+    def saveLabber(self, qb_idx, yoko_value=None):
+        expt_name = "s006_Ramsey_ge" + f"_Q{qb_idx}"
+        file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
+        try:
+            self.cfg.pop("wait_time")
+        except:
+            pass
+
+        dict_val = yml_comment(self.cfg)
+
+        hdf5_generator(
+            filepath=file_path,
+            x_info={"name": "Times", "unit": "us", "values": self.delay_times},
+            z_info={"name": "Signal", "unit": "ADC unit", "values": self.iqdata},
+            comment=(f"T2 Ramsey = {self.fit_params[3]:.2f} us\n{dict_val}"),
+            tag="Ramsey",
+        )
+
+        print(f"Data save to {file_path}")

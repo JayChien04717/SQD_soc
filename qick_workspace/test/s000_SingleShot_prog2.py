@@ -10,9 +10,9 @@ import numpy as np
 from tqdm.auto import tqdm
 
 # ----- User Library ----- #
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
 
 # from .singleshotplot import hist
 # from .fitting import fit_doublegauss, double_gaussian

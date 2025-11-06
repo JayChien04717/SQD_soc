@@ -6,7 +6,7 @@ from copy import deepcopy
 import seaborn as sns
 import datetime
 import matplotlib.gridspec as gridspec
-from .. import fitting as fitter
+from ..tools import fitting as fitter
 
 """
 Readout Helpers Module

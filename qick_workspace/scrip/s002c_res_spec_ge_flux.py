@@ -1,20 +1,25 @@
-# ----- Qick package ----- #
-from qick import *
-from qick.pyro import make_proxy
-from qick.asm_v2 import AveragerProgramV2
-from qick.asm_v2 import QickSpan, QickSweep1D
-
-# ----- Library ----- #
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm.auto import tqdm
-
-# ----- User Library ----- #s
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
-from ..yamltool import yml_comment
 from IPython.display import display, clear_output
-from ..plotter.liveplot import liveplot
+
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.pyro import make_proxy
+from qick.asm_v2 import AveragerProgramV2, QickSpan, QickSweep1D
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.yamltool import yml_comment
+from ..plotter.liveplot import liveplotfun
 
 ##################
 # Define Program #
@@ -164,7 +169,7 @@ class Resonator_onetone_flux:
 
         self.freqs = prog.get_pulse_param("res_pulse", "freq", as_array=True)
 
-        iqdata, interrupted, avg_count = liveplot(
+        iqdata, interrupted, avg_count = liveplotfun(
             prog=prog,
             soc=self.soc,
             py_avg=py_avg,
@@ -176,7 +181,6 @@ class Resonator_onetone_flux:
             yoko_inst_addr=yoko_inst,
             yoko_mode=mode,
         )
-
         self.iqdata = iqdata
         self.yoko_currnet = yoko_value
 

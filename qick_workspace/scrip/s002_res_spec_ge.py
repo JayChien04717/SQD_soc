@@ -1,21 +1,26 @@
-# ----- Qick package ----- #
-from qick import *
-from qick.pyro import make_proxy
-from qick.asm_v2 import AveragerProgramV2
-from qick.asm_v2 import QickSpan, QickSweep1D
-
-# ----- Library ----- #
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm.auto import tqdm
 
-# ----- User Library ----- #
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
-from ..module_fitzcu import resonator_circlefit, resonator_analyze
-from ..yamltool import yml_comment
-from ..plotter.liveplot import liveplot
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.pyro import make_proxy
+from qick.asm_v2 import AveragerProgramV2, QickSpan, QickSweep1D
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.module_fitzcu import resonator_circlefit, resonator_analyze
+from ..tools.yamltool import yml_comment
+from ..plotter.liveplot import liveplotfun
 
 ##################
 # Define Program #
@@ -154,7 +159,7 @@ class Resonator_onetone:
         )
         self.freqs = prog.get_pulse_param("res_pulse", "freq", as_array=True)
 
-        iqdata, interrupted, avg_count = liveplot(
+        iqdata, interrupted, avg_count = liveplotfun(
             prog=prog,
             soc=self.soc,
             py_avg=py_avg,
@@ -174,7 +179,7 @@ class Resonator_onetone:
             print("No data was acquired.")
             return None
 
-        param = resonator_circlefit(self.freqs, self.iqdata, solve_type=solve_type)
+        self.param = resonator_circlefit(self.freqs, self.iqdata, solve_type=solve_type)
 
         if interrupted:
             print(
@@ -182,7 +187,7 @@ class Resonator_onetone:
                 "Circle fit is based on partial data."
             )
 
-        return param
+        return self.param
 
     def saveLabber(self, qb_idx, yoko_value=None):
         expt_name = "s002_onetone" + f"_Q{qb_idx}"
@@ -198,7 +203,7 @@ class Resonator_onetone:
             filepath=file_path,
             x_info={"name": "Frequency", "unit": "Hz", "values": self.freqs * 1e6},
             z_info={"name": "Signal", "unit": "ADC unit", "values": self.iqdata},
-            comment=(f"{dict_val}"),
+            comment=(f"f_res = {self.param[0] / 1e6:.4f} MHz, \n{dict_val}"),
             tag="OneTone",
         )
         print(f"Data save to {file_path}")

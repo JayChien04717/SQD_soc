@@ -1,17 +1,25 @@
-# ----- Qick package ----- #
-from qick import *
-from qick.pyro import make_proxy
-from qick.asm_v2 import AveragerProgramV2
-from qick.asm_v2 import QickSpan, QickSweep1D
-
-# ----- Library ----- #
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm.auto import tqdm
+from IPython.display import display, clear_output, update_display
 
-# ----- User Library ----- #
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import hdf5_generator, get_next_filename_labber
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.pyro import make_proxy
+from qick.asm_v2 import AveragerProgramV2, QickSpan, QickSweep1D
+
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import hdf5_generator, get_next_filename_labber
 
 
 ##################
@@ -63,13 +71,21 @@ class TOF:
         self.soc = soc
         self.soccfg = soccfg
         self.cfg = config
+        self.iqdata = None
+        self.iq_list = None
+        self.t = None
 
-    def run(self, py_avg=1):
-        prog = LoopbackProgram(
-            self.soccfg, reps=1, final_delay=self.cfg["relax_delay"], cfg=self.cfg
-        )
-        self.iq_list = prog.acquire_decimated(self.soc, rounds=py_avg)
-        self.t = prog.get_time_axis(ro_index=0)
+    def run(self, py_avg=1, liveplot=True):
+        if liveplot:
+            return self.liveplot(py_avg=py_avg)
+        else:
+            prog = LoopbackProgram(
+                self.soccfg, reps=1, final_delay=self.cfg["relax_delay"], cfg=self.cfg
+            )
+            self.iq_list = prog.acquire_decimated(self.soc, rounds=py_avg)
+            self.t = prog.get_time_axis(ro_index=0)
+            self.iqdata = self.iq_list[0].dot([1, 1j])
+            return self.iqdata
 
     def plot(self, thressold=1.5):
         if self.iq_list is not None:
@@ -78,7 +94,6 @@ class TOF:
             plt.plot(self.t, np.abs((self.iq_list[0]).dot([1, 1j])))
             plt.xlabel("Time (us)")
             plt.ylabel("a.u")
-            # plt.title("Time Of Flight")
 
             mean = np.mean(np.abs(self.iq_list[0].dot([1, 1j])))
             plt.axvline(
@@ -95,6 +110,101 @@ class TOF:
         else:
             print("No data to plot. Run the experiment first.")
 
+    def liveplot(self, py_avg=1, thressold=1.5):
+        prog = LoopbackProgram(
+            self.soccfg, reps=1, final_delay=self.cfg["relax_delay"], cfg=self.cfg
+        )
+        self.t = prog.get_time_axis(ro_index=0)
+
+        iq_sum = 0
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+
+        nan_data = np.full_like(self.t, np.nan, dtype=float)
+        (line,) = ax.plot(self.t, nan_data, alpha=0.8)
+
+        ax.set_xlabel("Time ($\mu$s)")
+        ax.set_ylabel("ADC Units (Abs)")
+        title = ax.set_title("Time of Flight (TOF) | Average: 0 / 0")
+
+        plot_display_id = f"live-plot-tof-{np.random.randint(1e9)}"
+        display(fig, display_id=plot_display_id)
+
+        interrupted = False
+        i = 0
+
+        # --- 設定 X 軸範圍 (只需要設定一次) ---
+        t_min = np.min(self.t)
+        t_max = np.max(self.t)
+        ax.set_xlim(t_min, t_max)
+        # ------------------------------------
+
+        try:
+            for i in tqdm(range(py_avg), desc="Software Average Count"):
+                self.iq_list = prog.acquire_decimated(self.soc, rounds=1)
+
+                current_iq_data = self.iq_list[0].dot([1, 1j])
+
+                if i == 0:
+                    iq_sum = current_iq_data
+                else:
+                    iq_sum += current_iq_data
+
+                self.iqdata = iq_sum / (i + 1)
+
+                plot_data_abs = np.abs(self.iqdata)
+                line.set_ydata(plot_data_abs)
+
+                # --- 修正後的 Y 軸動態範圍調整 (確保能看到數據變化) ---
+                current_min, current_max = np.min(plot_data_abs), np.max(plot_data_abs)
+                range_span = current_max - current_min
+                if range_span == 0:
+                    range_span = 1e-9
+                ax.set_ylim(
+                    current_min - 0.1 * range_span, current_max + 0.1 * range_span
+                )
+                # ----------------------------------------------------
+
+                title.set_text(f"Time of Flight (TOF) | Average: {i + 1} / {py_avg}")
+
+                update_display(fig, display_id=plot_display_id)
+
+        except KeyboardInterrupt:
+            interrupted = True
+            print(f"Interrupted by user at average count: {i + 1}")
+
+        clear_output(wait=True)
+
+        if self.iqdata is not None:
+            final_fig, final_ax = plt.subplots(figsize=(7, 5))
+            final_ax.plot(
+                self.t, np.abs(self.iqdata), "o-", markersize=2, label="Averaged Data"
+            )
+
+            mean = np.mean(np.abs(self.iqdata))
+            cross_index = np.argmax(np.abs(self.iqdata) > thressold * mean)
+            trig_time = self.t[cross_index]
+
+            final_ax.axvline(
+                trig_time, c="r", ls="--", label=f"TOF: {trig_time:.2f} $\mu$s"
+            )
+
+            title_text = f"Time of Flight Experiment, trig = {trig_time:.2f} $\mu$s"
+            if interrupted:
+                title_text += " (Interrupted)"
+
+            final_ax.set_title(title_text)
+            final_ax.set_xlabel("Time ($\mu$s)")
+            final_ax.set_ylabel("ADC unit")
+            final_ax.set_xlim(t_min, t_max)  # 應用最終 X-axis limit
+            final_ax.legend()
+            display(final_fig)
+            plt.close(final_fig)
+
+        plt.close(fig)
+
+        return self.iqdata, not interrupted, i + 1
+
     def saveLabber(self, qb_idx):
         expt_name = "s001_tof" + f"_Q{qb_idx}"
         file_path = get_next_filename_labber(DATA_PATH, expt_name)
@@ -107,6 +217,6 @@ class TOF:
                 "values": self.iq_list[0].dot([1, 1j]),
             },
             comment=(),
-            tag="OneTone",
+            tag="TOF",
         )
         print(f"Data save to {file_path}")

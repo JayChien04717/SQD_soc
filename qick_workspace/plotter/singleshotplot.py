@@ -2,7 +2,7 @@ from itertools import cycle
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.integrate import quad
-import fitting as fitter
+from ..tools import fitting as fitter
 
 # Use np.hist and plt.plot to accomplish plt.hist with less memory usage
 default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]

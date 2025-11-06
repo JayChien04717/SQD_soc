@@ -6,25 +6,32 @@ import pyvisa
 from IPython.display import display, clear_output, update_display
 from tqdm.auto import tqdm
 
-from ..system_tool.YOKOGS200 import YOKOGS200
-from ..system_tool.system_tool import auto_unit
+# ===================================================================
+# User Imports
+# ===================================================================
+from ..tools.YOKOGS200 import YOKOGS200
+from ..tools.system_tool import auto_unit
+
+# ===================================================================
+# 1. The Facade Function
+# ===================================================================
 
 
 def liveplotfun(
-    prog=None,  # 適用於: sw_avg, yoko
-    soc=None,  # 適用於: sw_avg, yoko
-    py_avg=1,  # 適用於: ALL
-    x_axis_vals=None,  # 適用於: sw_avg (作為X軸), yoko (作為內層迴圈X軸)
-    y_axis_vals=None,  # 適用於: sw_avg (作為2D圖的Y軸), yoko (作為外層迴圈Yoko值)
+    prog=None,  # Applicable to: sw_avg, yoko
+    soc=None,  # Applicable to: sw_avg, yoko
+    py_avg=1,  # Applicable to: ALL
+    x_axis_vals=None,  # Applicable to: sw_avg (as X-axis), yoko (as inner loop X-axis)
+    y_axis_vals=None,  # Applicable to: sw_avg (as Y-axis for 2D plot), yoko (as outer loop Yoko values)
     x_label="X Axis",
     y_label="Y Axis",
     title_prefix="Experiment",
-    # --- Yoko-specific ---
+    # --- Yoko-specific parameters ---
     yoko_inst_addr=None,
     yoko_mode="current",
     # --- 1D Scan specific ---
-    scan_x_axis=None,  # 如果提供此參數，則啟用 1D 參數掃描模式
-    get_prog_callback=None,  # 用於 1D 掃描時動態產生 program 的回呼函式
+    scan_x_axis=None,  # If provided, enables 1D parameter scan mode
+    get_prog_callback=None,  # Callback function to dynamically generate programs for 1D scan
     # --- General ---
     show_final_plot=True,
 ):
@@ -48,7 +55,6 @@ def liveplotfun(
             x_label=x_label,
             y_label=y_label,
             title_prefix=title_prefix,
-            show_final_plot=show_final_plot,
         )
 
     # Mode 2: 1D Parameter Scan (e.g., Length Rabi, T1)
@@ -97,24 +103,31 @@ def _liveplot_sw_avg(
     show_final_plot=False,
 ):
     """
-    [Internal function] Executes a software-averaged live plot (1D or 2D) using a separate, persistent thread.
+    [Internal function] Executes a software-averaged live plot (1D or 2D) using a separate, persistent thread
+    for non-blocking visualization. Utilizes a producer-consumer pattern with frame dropping to ensure
+    data acquisition speed is not bottlenecked by rendering performance.
     """
+    # Use a LIFO queue with maxsize=1 to always prefer the latest data frame, implementing "frame dropping"
     data_queue = queue.LifoQueue(maxsize=1)
     stop_event = threading.Event()
 
     iq = 0
     iqdata = None
-    interrupted = False
     last_i = 0
+    interrupted = False
 
+    # Initialize the figure and axes once before the loop
     fig, ax = plt.subplots(figsize=(6, 4))
     plot_display_id = f"live-plot-optimized-{np.random.randint(1e9)}"
+    # Initial display of the empty/starting figure
     display(fig, display_id=plot_display_id)
 
     is_2d = y_axis_vals is not None
     plot_artist = None
 
+    # Pre-create plot artists (Lines or QuadMesh) to be updated later
     if is_2d:
+        # For 2D plots, initialize with zeros
         plot_artist = ax.pcolormesh(
             x_axis_vals,
             y_axis_vals,
@@ -124,6 +137,7 @@ def _liveplot_sw_avg(
         fig.colorbar(plot_artist, ax=ax, label="Normalized Amplitude")
         ax.set_ylabel(y_label)
     else:
+        # For 1D plots, initialize an empty line
         (plot_artist,) = ax.plot(
             x_axis_vals, np.zeros_like(x_axis_vals), "o-", markersize=5, alpha=0.7
         )
@@ -132,64 +146,80 @@ def _liveplot_sw_avg(
     ax.set_xlabel(x_label)
     ax.set_title(f"{title_prefix} (Initializing...)")
 
+    # --- Consumer Thread (Plotter) ---
     def plotter_thread_func():
         while not stop_event.is_set():
             try:
+                # Wait briefly for new data; timeout allows checking stop_event regularly
                 current_i, data = data_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
 
+            # Efficiently update existing plot artists instead of clearing and redrawing
             if is_2d:
                 plot_artist.set_array(data.ravel())
+                # Optional: dynamically update color scale for better contrast
                 plot_artist.set_clim(vmin=np.min(data), vmax=np.max(data))
             else:
                 plot_artist.set_ydata(data)
+                # Dynamically rescale Y-axis to fit new data
                 ax.set_ylim(np.min(data) * 0.98, np.max(data) * 1.02)
 
             ax.set_title(f"{title_prefix} | Average: {current_i + 1} / {py_avg}")
+            # Force a refresh of the displayed figure in the notebook
             display(fig, display_id=plot_display_id, update=True)
             data_queue.task_done()
 
+    # Start the persistent plotter thread as a daemon
     plot_thread = threading.Thread(target=plotter_thread_func, daemon=True)
     plot_thread.start()
 
+    # --- Producer Loop (Data Acquisition) ---
     try:
         for i in tqdm(range(py_avg), desc="Software Average Count", mininterval=0.1):
             last_i = i
+
+            # Acquire data from hardware
             iq_list = prog.acquire(soc, rounds=1, progress=False)
             iq_data = iq_list[0][0].dot([1, 1j])
+            # Perform cumulative moving average
             iq = iq_data if i == 0 else iq + iq_data
             iqdata = iq / (i + 1)
             plot_data_abs = np.abs(iqdata)
 
+            # Prepare data for plotting (normalization for 2D if needed)
             if is_2d:
                 row_mins = plot_data_abs.min(axis=1, keepdims=True)
                 row_maxs = plot_data_abs.max(axis=1, keepdims=True)
                 ranges = row_maxs - row_mins
-                ranges[ranges == 0] = 1
+                ranges[ranges == 0] = 1  # Avoid division by zero
                 data_to_push = (plot_data_abs - row_mins) / ranges
             else:
                 data_to_push = plot_data_abs
 
+            # Non-blocking push to queue: if full, drop the old frame and push the new one
             try:
                 data_queue.put_nowait((i, data_to_push))
             except queue.Full:
                 try:
-                    data_queue.get_nowait()
-                    data_queue.put_nowait((i, data_to_push))
+                    data_queue.get_nowait()  # Drop old frame
+                    data_queue.put_nowait((i, data_to_push))  # Push new frame
                 except:
-                    pass
+                    pass  # Ignore race conditions during extreme load
 
     except KeyboardInterrupt:
         interrupted = True
     finally:
+        # Signal plotter thread to stop and wait for it to finish nicely
         stop_event.set()
         if plot_thread.is_alive():
             plot_thread.join(timeout=1.0)
 
+    # Clean up the live plot display
     clear_output(wait=True)
     plt.close(fig)
 
+    # --- Final Static Plot ---
     if show_final_plot:
         final_fig, final_ax = plt.subplots(figsize=(6, 4))
         title_status = "Interrupted" if interrupted else "Completed"
@@ -199,6 +229,7 @@ def _liveplot_sw_avg(
         if iqdata is not None:
             plot_data_abs = np.abs(iqdata)
             if is_2d:
+                # Re-apply normalization for the final static plot
                 row_mins = plot_data_abs.min(axis=1, keepdims=True)
                 row_maxs = plot_data_abs.max(axis=1, keepdims=True)
                 ranges = row_maxs - row_mins
@@ -227,7 +258,7 @@ def _liveplot_sw_avg(
 
 
 # ===================================================================
-# 3. Internal Function: Yoko Parameter Sweep
+# 3. Internal Function: Yoko Parameter Sweep (Restored to Original Y-axis Sweep)
 # ===================================================================
 def _liveplot_sweep_yoko(
     prog,
@@ -240,103 +271,97 @@ def _liveplot_sweep_yoko(
     x_label="X Axis",
     y_label="Y Axis",
     title_prefix="Experiment",
-    show_final_plot=True,
 ):
-    """
-    [Internal function] Executes a Yoko parameter sweep live plot.
-    """
-    rm = None
-    yoko = None
+    rm = pyvisa.ResourceManager()
+    yoko = YOKOGS200(yoko_inst_addr, rm)
+
     iqdata_full = np.zeros((len(y_axis_vals_yoko), len(x_axis_vals)), dtype=complex)
-    data_to_plot = np.zeros_like(iqdata_full, dtype=float)
+    data_to_plot = np.zeros((len(y_axis_vals_yoko), len(x_axis_vals)))
     interrupted = False
     last_idx = 0
 
     fig, ax = plt.subplots(figsize=(6, 4))
-    plot_display_id = f"live-plot-yoko-{np.random.randint(1e9)}"
-    display(fig, display_id=plot_display_id)
 
     try:
-        rm = pyvisa.ResourceManager()
-        yoko = YOKOGS200(yoko_inst_addr, rm)
+        yoko_unit = "A" if yoko_mode == "current" else "V"
+        value_info = auto_unit(y_axis_vals_yoko, yoko_unit)
+        plot_x_vals = value_info["value"]
+        dynamic_x_label = f"{y_label} ({value_info['unit']})"
 
-        if yoko_mode == "current":
-            yoko.SetMode("current")
-            yoko_unit = "A"
-        else:
-            yoko.SetMode("voltage")
-            yoko_unit = "V"
-        yoko.SetOutput(1)
+        # 儲存單位以在標題中使用
+        current_yoko_unit = value_info["unit"]
+    except NameError:
+        plot_x_vals = y_axis_vals_yoko
+        dynamic_x_label = y_label
+        current_yoko_unit = yoko_unit  # 如果 auto_unit 失敗，使用原始單位
 
-        try:
-            value_info = auto_unit(y_axis_vals_yoko, yoko_unit)
-            y_plot_vals = value_info["value"]
-            dynamic_y_label = f"{y_label} ({value_info['unit']})"
-        except Exception:
-            y_plot_vals = y_axis_vals_yoko
-            dynamic_y_label = y_label
+    plot_y_vals = x_axis_vals
+    dynamic_y_label = x_label
 
-        mesh = ax.pcolormesh(
-            y_plot_vals, x_axis_vals, data_to_plot.T, shading="nearest"
-        )
-        ax.set_xlabel(dynamic_y_label)
-        ax.set_ylabel(x_label)
+    mesh = ax.pcolormesh(plot_x_vals, plot_y_vals, data_to_plot.T, shading="nearest")
 
-        for idx, val in enumerate(tqdm(y_axis_vals_yoko, desc=f"Sweeping {yoko_mode}")):
+    ax.set_xlabel(dynamic_x_label)
+    ax.set_ylabel(dynamic_y_label)
+
+    plot_display_id = f"live-plot-yoko-swapped-{np.random.randint(1e9)}"
+    display_handle = display(fig, display_id=plot_display_id)
+
+    try:
+        for idx, val in enumerate(
+            tqdm(y_axis_vals_yoko, desc=f"Sweeping {yoko_mode} (Plot X-axis)")
+        ):
             last_idx = idx
+            title = auto_unit(val)
             if yoko_mode == "current":
+                yoko.SetMode("current")
                 yoko.SetCurrent(val)
+
+                ax.set_title(f"{title_prefix} | {title['value']:.2f}{title['unit']}A")
             else:
+                yoko.SetMode("voltage")
                 yoko.SetVoltage(val)
+                ax.set_title(f"{title_prefix} | {title['value']:.2f}{title['unit']}V")
 
             iq_list = prog.acquire(soc, rounds=py_avg, progress=False)
             iq_data_row = iq_list[0][0].dot([1, 1j])
+
             iqdata_full[idx, :] = iq_data_row
-            data_to_plot[idx, :] = np.abs(iq_data_row)
+            data_to_plot = np.abs(iqdata_full)
 
             mesh.set_array(data_to_plot.T.ravel())
+
             current_max = np.max(data_to_plot)
             if current_max > 0:
                 mesh.set_clim(vmin=0, vmax=current_max)
 
-            ax.set_title(f"Step: {idx + 1} / {len(y_axis_vals_yoko)}")
+            # -----------------------------------------------
+
             update_display(fig, display_id=plot_display_id)
 
     except KeyboardInterrupt:
         interrupted = True
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        interrupted = True
-    finally:
-        if yoko:
-            try:
-                yoko.close()
-            except:
-                pass
-        if rm:
-            try:
-                rm.close()
-            except:
-                pass
+        pass
 
     clear_output(wait=True)
+
     if interrupted:
-        print(f"Scan interrupted at step: {last_idx + 1}")
+        print(f"KeyboardInterrupt: Interrupted at Yoko step: {last_idx + 1}")
 
-    if show_final_plot:
-        fig_final, ax_final = plt.subplots(figsize=(6, 4))
-        title_status = "Interrupted" if interrupted else "Completed"
-        ax_final.set_title(f"{title_prefix} ({title_status})")
-        ax_final.set_xlabel(dynamic_y_label)
-        ax_final.set_ylabel(x_label)
-        im = ax_final.pcolormesh(
-            y_plot_vals, x_axis_vals, data_to_plot.T, shading="nearest"
-        )
-        fig_final.colorbar(im, ax=ax_final, label="Amplitude (Abs)")
-        display(fig_final)
-        plt.close(fig_final)
+    ax.cla()
+    if interrupted:
+        ax.set_title(f"{title_prefix} (Interrupted at step {last_idx + 1})")
+    else:
+        ax.set_title(f"{title_prefix} (Completed)")
 
+    ax.set_xlabel(dynamic_x_label)
+    ax.set_ylabel(dynamic_y_label)
+
+    im = ax.pcolormesh(plot_x_vals, plot_y_vals, data_to_plot.T, shading="nearest")
+    fig.colorbar(im, ax=ax, label="Amplitude")
+
+    display(fig)
     plt.close(fig)
+
     return iqdata_full, interrupted, last_idx + 1
 
 
@@ -358,10 +383,11 @@ def _liveplot_1d_scan(
     """
     iq_sum = 0
     iqdata = None
-    interrupted = False
     last_avg = 0
+    interrupted = False
 
     fig, ax = plt.subplots(figsize=(6, 4))
+    # Initialize with zeros for the starting line
     (line,) = ax.plot(
         scan_x_axis, np.zeros_like(scan_x_axis), "o-", markersize=5, alpha=0.7
     )
@@ -380,20 +406,24 @@ def _liveplot_1d_scan(
             for val in scan_x_axis:
                 # Use the callback to get a new program for this specific scan value
                 prog = get_prog_callback(val)
+                # Acquire 1 round for this point
                 iq_list = prog.acquire(soc, rounds=1, progress=False)
                 iqlst.append(iq_list[0][0].dot([1, 1j]))
 
             current_iq_data = np.array(iqlst)
+            # Cumulative moving average
             iq_sum = current_iq_data if avg == 0 else iq_sum + current_iq_data
             iqdata = iq_sum / (avg + 1)
 
-            # Update plot
+            # Update plot data
             plot_data = np.abs(iqdata)
             line.set_ydata(plot_data)
+
+            # Dynamically adjust Y-axis range
             current_min, current_max = np.min(plot_data), np.max(plot_data)
             range_span = current_max - current_min
             if range_span == 0:
-                range_span = 1  # Avoid zero range
+                range_span = 1  # Avoid zero range if data is flat
             ax.set_ylim(
                 current_min - 0.05 * range_span, current_max + 0.05 * range_span
             )

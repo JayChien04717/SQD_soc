@@ -1,21 +1,28 @@
-# ----- Qick package ----- #
-from qick import *
-from qick.asm_v2 import AveragerProgramV2
-
-# ----- Library ----- #
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ----- User Library ----- #
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
-from ..fitting import decaysin, fitdecaysin, expfunc, fitexp
-from ..module_fitzcu import T2fring_analyze
-from ..yamltool import yml_comment
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.asm_v2 import AveragerProgramV2
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.fitting import decaysin, fitdecaysin, expfunc, fitexp
+from ..tools.module_fitzcu import T2fring_analyze
+from ..tools.yamltool import yml_comment
 from ..plotter.liveplot import liveplotfun
 from ..plotter.plot_utils import plot_final
-from ..yamltool import yml_comment
+
+
 ##################
 # Define Program #
 ##################
@@ -209,14 +216,16 @@ class Ramsey:
             self.delay_times = prog.get_time_param("wait", "t", as_array=True)
 
     def plot(self):
-        self.t2r = T2fring_analyze(self.delay_times, self.iqdata, prefix="Ramsey")
+        T2fring_analyze(self.delay_times, self.iqdata, prefix="Ramsey")
 
     def correct_detune(self):
-        if abs(self.t2r[1] - self.cfg["ramsey_freq"]) > 0.005:
+        if abs(self.fit_params[1] - self.cfg["ramsey_freq"]) > 0.005:
             self.cfg["qubit_freq_ge"] = self.cfg["qubit_freq_ge"] - round(
-                (self.t2r[1] - self.cfg["ramsey_freq"]), 2
+                (self.fit_params[1] - self.cfg["ramsey_freq"]), 2
             )
-            print(f"over detune {round((self.t2r[1] - self.cfg['ramsey_freq']), 5)}MHz")
+            print(
+                f"over detune {round((self.fit_params[1] - self.cfg['ramsey_freq']), 5)}MHz"
+            )
             return round(self.cfg["qubit_freq_ge"], 5)
         else:
             print("Detune < 5kHz")

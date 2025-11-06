@@ -1,22 +1,25 @@
-# ----- Qick package ----- #
-from qick import *
-from qick.pyro import make_proxy
-from qick.asm_v2 import AveragerProgramV2
-from qick.asm_v2 import QickSpan, QickSweep1D
-
-# ----- Library ----- #
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
-
-# ----- User Library ----- #
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
 from tqdm.auto import tqdm
-from ..module_fitzcu import spectrum_analyze, post_rotate
-from ..fitting import *
-from ..yamltool import yml_comment
 from IPython.display import display, clear_output
+
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.pyro import make_proxy
+from qick.asm_v2 import AveragerProgramV2, QickSpan, QickSweep1D
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.yamltool import yml_comment
 
 ### AllXY Sequence ###
 sequence = [

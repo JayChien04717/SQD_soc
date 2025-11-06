@@ -1,29 +1,26 @@
-# ==================================
-# 1. Qick & Qick-Lab Core Packages
-# ==================================
-from qick import *
-from qick.pyro import make_proxy
-from qick.asm_v2 import AveragerProgramV2
-from qick.asm_v2 import QickSpan, QickSweep1D
-
-# ==================================
-# 2. Standard & External Libraries
-# ==================================
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
-from IPython.display import display, clear_output, update_display
 
-# ==================================
-# 3. Project-Specific/Local Libraries
-# ==================================
-# 從您的專案系統配置和工具中導入
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
-from ..fitting import *
-from ..yamltool import yml_comment
-from ..plotter.liveplot import liveplot
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.pyro import make_proxy
+from qick.asm_v2 import AveragerProgramV2, QickSpan, QickSweep1D
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.fitting import *
+from ..tools.yamltool import yml_comment
+from ..plotter.liveplot import liveplotfun
 
 ##################
 # Define Program #
@@ -116,7 +113,7 @@ class SingleToneSpectroscopyPunchout:
         self.freqs = prog.get_pulse_param("res_pulse", "freq", as_array=True)
         self.gains = prog.get_pulse_param("res_pulse", "gain", as_array=True)
 
-        self.iqdata, interrupted, avg_count = liveplot(
+        self.iqdata, interrupted, avg_count = liveplotfun(
             prog=prog,
             soc=self.soc,
             py_avg=py_avg,
@@ -126,7 +123,7 @@ class SingleToneSpectroscopyPunchout:
             y_label="DAC Gain",
             title_prefix="Resonator Punchout",
             yoko_inst_addr=None,
-            show_final_plot=True,
+            show_final_plot=False,
         )
         if self.iqdata is None:
             print("No data was acquired.")

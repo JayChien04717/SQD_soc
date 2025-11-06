@@ -1,21 +1,26 @@
-# ----- Qick package ----- #
-from qick import *
-from qick.asm_v2 import AveragerProgramV2
-
-# ----- Library ----- #
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ----- User Library ----- #
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
-from ..fitting import decaysin, fitdecaysin, fix_phase
-from ..module_fitzcu import amprabi_analyze
-from ..yamltool import yml_comment
-from ..plotter.liveplot import liveplot
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.asm_v2 import AveragerProgramV2
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.fitting import decaysin, fitdecaysin, fix_phase
+from ..tools.module_fitzcu import amprabi_analyze
+from ..tools.yamltool import yml_comment
+from ..plotter.liveplot import liveplotfun
 from ..plotter.plot_utils import plot_final
-from ..yamltool import yml_comment
 
 
 ##################
@@ -203,7 +208,7 @@ class Amp_Rabi:
         )
         self.gains = prog.get_pulse_param("qubit_pulse", "gain", as_array=True)
 
-        iqdata, interrupted, avg_count = liveplot(
+        iqdata, interrupted, avg_count = liveplotfun(
             prog=prog,
             soc=self.soc,
             py_avg=py_avg,

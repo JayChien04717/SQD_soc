@@ -1,22 +1,27 @@
-# ----- Qick package ----- #
-from qick import *
-from qick.asm_v2 import AveragerProgramV2
-
-# ----- Library ----- #
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm.auto import tqdm
 
-# ----- User Library ----- #
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
-from ..fitting import decaysin, fitdecaysin, fix_phase
-from ..module_fitzcu import lengthrabi_analyze
-from ..yamltool import yml_comment
-from ..plotter.liveplot import liveplot
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.asm_v2 import AveragerProgramV2
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.fitting import decaysin, fitdecaysin, fix_phase
+from ..tools.module_fitzcu import lengthrabi_analyze
+from ..tools.yamltool import yml_comment
+from ..plotter.liveplot import liveplotfun
 from ..plotter.plot_utils import plot_final
-from ..yamltool import yml_comment
 
 ##################
 # Define Program #
@@ -170,8 +175,7 @@ class Time_Rabi:
 
         self.time_step = time_axis
 
-        # 呼叫通用的 liveplot
-        self.iqdata, interrupted, done_avg = liveplot(
+        self.iqdata, interrupted, done_avg = liveplotfun(
             soc=self.soc,
             py_avg=py_avg,
             scan_x_axis=self.time_step,
@@ -199,7 +203,7 @@ class Time_Rabi:
         hdf5_generator(
             filepath=file_path,
             x_info={"name": "Time", "unit": "s", "values": self.time_step * 1e-6},
-            z_info={"name": "Signal", "unit": "ADC unit", "values": self.iqlst},
+            z_info={"name": "Signal", "unit": "ADC unit", "values": self.iqdata},
             comment=(f"Rabi frequency = {self.fit_params[1]:.3f} MHz\n{dict_val}"),
             tag="Rabi",
         )

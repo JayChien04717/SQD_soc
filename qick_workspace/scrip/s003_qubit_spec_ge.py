@@ -1,18 +1,24 @@
-# ----- Qick package ----- #
-from qick import *
-from qick.asm_v2 import AveragerProgramV2
-
-# ----- Library ----- #
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
 
-# ----- User Library ----- #
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
-from ..module_fitzcu import spectrum_analyze
-from ..fitting import fitlor, lorfunc
-from ..yamltool import yml_comment
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.asm_v2 import AveragerProgramV2
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.module_fitzcu import spectrum_analyze
+from ..tools.fitting import fitlor, lorfunc
+from ..tools.yamltool import yml_comment
 from ..plotter.liveplot import liveplotfun
 from ..plotter.plot_utils import plot_final
 

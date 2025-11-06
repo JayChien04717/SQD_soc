@@ -1,24 +1,28 @@
-# ----- Qick package ----- #
-from qick import *
-from qick.pyro import make_proxy
-from qick.asm_v2 import AveragerProgramV2
-from qick.asm_v2 import QickSpan, QickSweep1D
-
-# ----- Library ----- #
+# ===================================================================
+# 1. Standard & Third-Party Scientific Libraries
+# ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
-import matplotlib.colors as mcolors  # Added from Tomography
+from tqdm.auto import tqdm
+from IPython.display import display, clear_output
 import matplotlib.colors as mcolors
 from mpl_toolkits.mplot3d import Axes3D
-from tqdm.auto import tqdm
 
-# ----- User Library ----- #
-from ..system_cfg import *
-from ..system_cfg import DATA_PATH
-from ..system_tool import get_next_filename_labber, hdf5_generator
-from ..fitting import *
-from ..yamltool import yml_comment
-from IPython.display import display, clear_output
+# ===================================================================
+# 2. QICK Libraries
+# ===================================================================
+from qick import *
+from qick.pyro import make_proxy
+from qick.asm_v2 import AveragerProgramV2, QickSpan, QickSweep1D
+
+# ===================================================================
+# 3. User/Local Libraries
+# ===================================================================
+from ..tools.system_cfg import *
+from ..tools.system_cfg import DATA_PATH
+from ..tools.system_tool import get_next_filename_labber, hdf5_generator
+from ..tools.fitting import *
+from ..tools.yamltool import yml_comment
 
 
 class StateTomography(AveragerProgramV2):
@@ -212,8 +216,6 @@ class StateTomography(AveragerProgramV2):
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
 
-
-# (請確保 mpl_toolkits.mplot3d.Axes3D 已在檔案頂端 import)
 
 # ######################################################
 # ### Tomography Controller Class (Matplotlib 3D) ###

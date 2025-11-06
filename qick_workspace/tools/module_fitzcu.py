@@ -6,7 +6,7 @@ from typing import Optional, Dict
 import pprint
 
 try:
-    from .abcd_rf_fit import *
+    from ..abcd_rf_fit import *
 except:
     print("No circle fit package")
 

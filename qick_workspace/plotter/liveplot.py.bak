@@ -298,7 +298,7 @@ def _liveplot_sweep_yoko(
     plot_y_vals = x_axis_vals
     dynamic_y_label = x_label
 
-    mesh = ax.pcolormesh(plot_x_vals, plot_y_vals, data_to_plot.T, shading="nearest", cmap="viridis",)
+    mesh = ax.pcolormesh(plot_x_vals, plot_y_vals, data_to_plot.T, shading="nearest")
 
     ax.set_xlabel(dynamic_x_label)
     ax.set_ylabel(dynamic_y_label)

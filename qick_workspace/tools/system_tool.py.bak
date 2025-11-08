@@ -196,7 +196,7 @@ def get_next_filename_labber(
 
         # Regex to find files matching "exp_name_NNN.hdf5"
         # This will *only* match files from the normal (non-yoko) mode.
-        pattern = re.compile(rf"^{re.escape(exp_name)}_(\d+)\.hdf5$")
+        pattern = re.compile(rf"^{re.escape(exp_name)}_(\d+)$")
 
         # *** Core Change: Use os.walk to search all subdirectories ***
         for root, dirs, files in os.walk(dest_path):

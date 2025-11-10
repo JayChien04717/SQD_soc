@@ -240,9 +240,17 @@ class AllXY:
         amp = np.abs(self.allxy_lst)
 
         if amp[0] < amp[-1]:
-            ref = [np.min(amp)] * 5 + [np.mean(amp)] * 12 + [np.max(amp)] * 4
+            ref = (
+                [np.min(amp)] * 5
+                + [(np.max(amp) + np.min(amp)) / 2] * 12
+                + [np.max(amp)] * 4
+            )
         else:
-            ref = [np.max(amp)] * 5 + [np.mean(amp)] * 12 + [np.min(amp)] * 4
+            ref = (
+                [np.max(amp)] * 5
+                + [(np.max(amp) + np.min(amp)) / 2] * 12
+                + [np.min(amp)] * 4
+            )
 
         if len(ref) != len(amp):
             if len(ref) > len(amp):

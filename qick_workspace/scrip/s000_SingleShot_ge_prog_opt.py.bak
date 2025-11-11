@@ -879,49 +879,30 @@ class SingleShot_ge_opt:
         I_e_data = self.data["Ie"]
         Q_e_data = self.data["Qe"]
 
+        # --- 步驟 1: 網格計算 (必須保留) ---
         for l_idx in tqdm(range(len_L), desc="Analyze max fidelity"):
             for g_idx in range(len_G):
                 for f_idx in range(len_F):
-                    I_g = I_g_data[l_idx, g_idx, f_idx]
-                    Q_g = Q_g_data[l_idx, g_idx, f_idx]
-                    I_e = I_e_data[l_idx, g_idx, f_idx]
-                    Q_e = Q_e_data[l_idx, g_idx, f_idx]
+                    data_point = {
+                        "Ig": I_g_data[l_idx, g_idx, f_idx],
+                        "Qg": Q_g_data[l_idx, g_idx, f_idx],
+                        "Ie": I_e_data[l_idx, g_idx, f_idx],
+                        "Qe": Q_e_data[l_idx, g_idx, f_idx],
+                    }
 
-                    vec_I = np.mean(I_e) - np.mean(I_g)
-                    vec_Q = np.mean(Q_e) - np.mean(Q_g)
-                    denom = np.abs(vec_I + 1j * vec_Q) ** 2
+                    try:
+                        results = hist(
+                            data=data_point,
+                            plot=False,
+                            verbose=False,
+                            fid_avg=True,
+                            fit=False,
+                        )
 
-                    if denom == 0:
+                        fidelity = results[0][0]
+                        fid_Array[l_idx, g_idx, f_idx] = fidelity
+                    except Exception as e:
                         fid_Array[l_idx, g_idx, f_idx] = 0.0
-                        continue
-
-                    gstate = (
-                        (I_g - np.mean(I_g)) * vec_I + (Q_g - np.mean(Q_g)) * vec_Q
-                    ) / denom
-                    estate = (
-                        (I_e - np.mean(I_g)) * vec_I + (Q_e - np.mean(Q_g)) * vec_Q
-                    ) / denom
-
-                    if gstate.size == 0 or estate.size == 0:
-                        fid_Array[l_idx, g_idx, f_idx] = 0.0
-                        continue
-
-                    min_g = np.min(gstate)
-                    max_e = np.max(estate)
-                    if min_g >= max_e:
-                        min_g, max_e = min(min_g, max_e), max(min_g, max_e)
-                        if min_g == max_e:
-                            max_e += 1e-9
-
-                    th_list = np.linspace(min_g, max_e, 1000).reshape(-1, 1)
-                    g_proj = np.array(gstate).reshape(1, -1)
-                    e_proj = np.array(estate).reshape(1, -1)
-
-                    g_cdf = np.sum(g_proj < th_list, axis=1) / g_proj.shape[1]
-                    e_cdf = np.sum(e_proj > th_list, axis=1) / e_proj.shape[1]
-                    fidelity = (g_cdf + e_cdf) / 2
-
-                    fid_Array[l_idx, g_idx, f_idx] = np.max(fidelity)
 
         max_idx = np.unravel_index(np.argmax(fid_Array), fid_Array.shape)
         max_l_idx, max_g_idx, max_f_idx = max_idx
@@ -931,29 +912,14 @@ class SingleShot_ge_opt:
         max_gain_grid = self.gain_sweep[max_g_idx]
         max_freq_grid = self.freq_sweep[max_f_idx]
 
-        print(f"\n--- Grid Search Result ---")
-        print(f"Max fidelity (on grid): {max_fid_grid:.4f}")
-
-        length_str_grid = (
-            f"{max_length_grid:.3f} us" if max_length_grid is not None else "default"
-        )
-        gain_str_grid = (
-            f"{max_gain_grid:.5f} DAC" if max_gain_grid is not None else "default"
-        )
-        freq_str_grid = (
-            f"{max_freq_grid:.5f} MHz" if max_freq_grid is not None else "default"
-        )
-
-        print(
-            f"At length={length_str_grid}, gain={gain_str_grid}, freq={freq_str_grid}"
-        )
+        # --- 移除網格搜尋結果的輸出 (Grid Search Result) ---
+        # print(f"\n--- Grid Search Result ---")
+        # print(f"Max fidelity (on grid): {max_fid_grid:.4f}")
 
         max_length, max_gain, max_freq = max_length_grid, max_gain_grid, max_freq_grid
 
-        if not SCIPY_AVAILABLE:
-            print("\nWarning: `scipy` not found. Skipping interpolation.")
-            print("To enable, run: pip install scipy")
-        else:
+        # --- 步驟 2: 插值法優化 (Interpolation) ---
+        if SCIPY_AVAILABLE:
             try:
                 all_axes_data = [
                     (self.length_sweep, len_L, max_length_grid),
@@ -976,15 +942,10 @@ class SingleShot_ge_opt:
                     else:
                         fixed_params[i] = initial_val
 
-                if not opt_param_indices:
-                    print(
-                        "\nNo parameters to optimize (all sweeps have length 1 or are None)."
-                    )
-                    print("Returning grid search result.")
-                else:
+                if opt_param_indices:
                     squeezed_fid_Array = np.squeeze(fid_Array)
 
-                    if squeezed_fid_Array.ndim == 0:
+                    if squeezed_fid_Array.ndim == 0 and len(opt_param_indices) > 0:
                         squeezed_fid_Array = squeezed_fid_Array.reshape(
                             (1,) * len(opt_param_indices)
                         )
@@ -994,9 +955,6 @@ class SingleShot_ge_opt:
                             tuple(opt_axes), squeezed_fid_Array, method="cubic"
                         )
                     except ValueError:
-                        print(
-                            "Warning: Not enough data for cubic interpolation. Falling back to linear."
-                        )
                         interpolator = RegularGridInterpolator(
                             tuple(opt_axes), squeezed_fid_Array, method="linear"
                         )
@@ -1011,12 +969,7 @@ class SingleShot_ge_opt:
                         bounds=opt_bounds,
                     )
 
-                    if not result.success:
-                        print(
-                            f"\nWarning: Interpolation optimization failed. {result.message}"
-                        )
-                        print("Returning grid search result.")
-                    else:
+                    if result.success:
                         max_fid_interp = -result.fun
 
                         final_params = [None, None, None]
@@ -1047,18 +1000,26 @@ class SingleShot_ge_opt:
                         print(
                             f"At length={length_str}, gain={gain_str}, freq={freq_str}"
                         )
+                    else:
+                        pass
 
-            except Exception as e:
-                print(f"\nAn error occurred during interpolation: {e}")
-                print("Returning grid search result.")
+                else:
+                    pass
+            except Exception:
+                pass
+        else:
+            print("\nWarning: `scipy` not found. Skipping interpolation.")
+            print(
+                "Returning grid search result."
+            )  # 這裡保留是因為如果無法插值 至少提供網格結果
 
-        self.fid_Array = fid_Array  # 將 fid_Array 存儲在 self 中 供 plot 函數使用
+        self.fid_Array = fid_Array
 
         return_L = round(max_length, 3) if max_length is not None else None
         return_G = round(max_gain, 6) if max_gain is not None else None
         return_F = round(max_freq, 6) if max_freq is not None else None
 
-        return return_L, return_G, return_F
+        return return_L, return_G, return_F, fid_Array
 
     def plot_top_fidelity_histograms(self, top_n=9):
         if not hasattr(self, "fid_Array"):
@@ -1082,14 +1043,21 @@ class SingleShot_ge_opt:
 
         top_n_indices = np.unravel_index(top_n_flat_indices, fid_Array.shape)
 
+        # ------------------------------------------------------------------
+        # 🌟 關鍵修改步驟 1: 僅使用 Top-N 數據點計算整體 IQ 範圍
+        # ------------------------------------------------------------------
+
+        # 收集 Top-N 數據點的 Ig, Ie, Qg, Qe
         top_n_I_g = [self.data["Ig"][idx] for idx in zip(*top_n_indices)]
         top_n_Q_g = [self.data["Qg"][idx] for idx in zip(*top_n_indices)]
         top_n_I_e = [self.data["Ie"][idx] for idx in zip(*top_n_indices)]
         top_n_Q_e = [self.data["Qe"][idx] for idx in zip(*top_n_indices)]
 
+        # 將所有 Top-N 的 I 和 Q 數據合併為單一陣列
         all_I_data = np.concatenate(top_n_I_g + top_n_I_e)
         all_Q_data = np.concatenate(top_n_Q_g + top_n_Q_e)
 
+        # 計算 Top-N 數據集的全局 min/max
         overall_min = min(np.min(all_I_data), np.min(all_Q_data))
         overall_max = max(np.max(all_I_data), np.max(all_Q_data))
         range_span = overall_max - overall_min
@@ -1099,6 +1067,10 @@ class SingleShot_ge_opt:
         plot_max = overall_max + padding_val
 
         plot_extent = [plot_min, plot_max, plot_min, plot_max]
+
+        # ------------------------------------------------------------------
+        # 🌟 關鍵修改步驟 1 結束
+        # ------------------------------------------------------------------
 
         hexbin_gridsize = 50
 
@@ -1167,4 +1139,181 @@ class SingleShot_ge_opt:
             fig.delaxes(axes[j])
 
         plt.tight_layout()
+        plt.show()
+
+    def plot_iq_evolution_at_fixed_params(
+        self, fixed_L=None, fixed_G=None, fixed_F=None, gridsize=40
+    ):
+        """
+        固定其中兩個掃描參數 (Length, Gain, Freq)
+        然後繪製另一個掃描參數變化時的 IQ 2D Hexbin Histogram 演變圖
+
+        例如: 固定 Length 和 Freq, 觀察 Gain 變化時的 IQ 圖變化
+
+        Args:
+            fixed_L (float, optional): 固定的 Length 值。如果為 None 則 Length 成為掃描軸。
+            fixed_G (float, optional): 固定的 Gain 值。如果為 None 則 Gain 成為掃描軸。
+            fixed_F (float, optional): 固定的 Freq 值。如果為 None 則 Freq 成為掃描軸。
+            gridsize (int, optional): Hexbin 的網格大小。預設為 40。
+        """
+
+        # 1. 數據檢查
+        if not hasattr(self, "data"):
+            print(
+                "Error: 'self.data' is missing. Please run the data acquisition first."
+            )
+            return
+
+        fixed_params = {"L": fixed_L, "G": fixed_G, "F": fixed_F}
+        fixed_count = sum(p is not None for p in fixed_params.values())
+
+        if fixed_count != 2:
+            print(
+                "Error: Must specify EXACTLY two fixed parameters (e.g., fixed_L and fixed_F)."
+            )
+            return
+
+        # 確定掃描軸和固定軸
+        sweep_key = next(k for k, v in fixed_params.items() if v is None)
+
+        # 2. 查找固定參數對應的索引
+        try:
+            # 查找固定 L 的索引
+            if fixed_L is not None:
+                l_idx = np.argmin(np.abs(self.length_sweep - fixed_L))
+                actual_L = self.length_sweep[l_idx]
+            else:
+                l_idx = slice(None)  # 如果是掃描軸 則取所有索引
+                actual_L = None
+
+            # 查找固定 G 的索引
+            if fixed_G is not None:
+                g_idx = np.argmin(np.abs(self.gain_sweep - fixed_G))
+                actual_G = self.gain_sweep[g_idx]
+            else:
+                g_idx = slice(None)
+                actual_G = None
+
+            # 查找固定 F 的索引
+            if fixed_F is not None:
+                f_idx = np.argmin(np.abs(self.freq_sweep - fixed_F))
+                actual_F = self.freq_sweep[f_idx]
+            else:
+                f_idx = slice(None)
+                actual_F = None
+
+        except AttributeError:
+            print(
+                "Error: Sweep axes (length_sweep, gain_sweep, freq_sweep) are missing."
+            )
+            return
+
+        # 3. 提取掃描數據
+        I_g_slice = self.data["Ig"][l_idx, g_idx, f_idx]
+        Q_g_slice = self.data["Qg"][l_idx, g_idx, f_idx]
+        I_e_slice = self.data["Ie"][l_idx, g_idx, f_idx]
+        Q_e_slice = self.data["Qe"][l_idx, g_idx, f_idx]
+
+        # 確保數據是 1D 陣列的陣列 (即掃描軸的長度)
+        if I_g_slice.ndim != 1:
+            print(
+                "Error: Data slicing resulted in an unexpected dimension. Check sweep axes lengths."
+            )
+            return
+
+        # 獲取掃描軸的值
+        if sweep_key == "L":
+            sweep_values = self.length_sweep
+        elif sweep_key == "G":
+            sweep_values = self.gain_sweep
+        else:
+            sweep_values = self.freq_sweep
+
+        num_plots = len(I_g_slice)
+
+        if num_plots == 0:
+            print("Error: No data points found for the given fixed parameters.")
+            return
+
+        # 4. 計算統一繪圖範圍 (基於所有掃描點)
+        all_I_data = np.concatenate(I_g_slice.tolist() + I_e_slice.tolist())
+        all_Q_data = np.concatenate(Q_g_slice.tolist() + Q_e_slice.tolist())
+
+        overall_min = min(np.min(all_I_data), np.min(all_Q_data))
+        overall_max = max(np.max(all_I_data), np.max(all_Q_data))
+        range_span = overall_max - overall_min
+        padding_val = range_span * 0.05
+
+        plot_min = overall_min - padding_val
+        plot_max = overall_max + padding_val
+        plot_extent = [plot_min, plot_max, plot_min, plot_max]
+
+        # 5. 繪圖
+        grid_size = int(np.ceil(np.sqrt(num_plots)))
+        fig, axes = plt.subplots(
+            grid_size, grid_size, figsize=(5 * grid_size, 5 * grid_size)
+        )
+        axes = axes.flatten()
+
+        fixed_str = f"L={actual_L:.3f} us" if actual_L is not None else ""
+        fixed_str += f" G={actual_G:.5f} DAC" if actual_G is not None else ""
+        fixed_str += f" F={actual_F:.5f} MHz" if actual_F is not None else ""
+
+        fig.suptitle(
+            f"IQ Evolution along {sweep_key}-axis\n(Fixed: {fixed_str.strip()})",
+            fontsize=16,
+            y=1.02,
+        )
+
+        print(f"\nPlotting evolution of {sweep_key} ({num_plots} steps)...")
+        for i in range(num_plots):
+            ax = axes[i]
+
+            I_g, Q_g = I_g_slice[i], Q_g_slice[i]
+            I_e, Q_e = I_e_slice[i], Q_e_slice[i]
+            sweep_val = sweep_values[i]
+
+            # 繪製 Excited State (紅色)
+            ax.hexbin(
+                I_e,
+                Q_e,
+                gridsize=gridsize,
+                cmap="Reds",
+                alpha=0.6,
+                extent=plot_extent,
+                mincnt=1,
+            )
+
+            # 繪製 Ground State (藍色)
+            ax.hexbin(
+                I_g,
+                Q_g,
+                gridsize=gridsize,
+                cmap="Blues",
+                alpha=0.6,
+                extent=plot_extent,
+                mincnt=1,
+            )
+
+            ax.set_xlim(plot_min, plot_max)
+            ax.set_ylim(plot_min, plot_max)
+            ax.set_aspect("equal", adjustable="box")
+
+            # 設置標題
+            if sweep_key == "L":
+                title_str = f"L={sweep_val:.3f} us"
+            elif sweep_key == "G":
+                title_str = f"G={sweep_val:.5f} DAC"
+            else:
+                title_str = f"F={sweep_val:.5f} MHz"
+
+            ax.set_title(title_str, fontsize=10)
+            ax.set_xlabel("I")
+            ax.set_ylabel("Q")
+
+        # 隱藏多餘的子圖
+        for j in range(num_plots, len(axes)):
+            fig.delaxes(axes[j])
+
+        plt.tight_layout(rect=[0, 0, 1, 0.98])  # 調整佈局以容納 suptitle
         plt.show()

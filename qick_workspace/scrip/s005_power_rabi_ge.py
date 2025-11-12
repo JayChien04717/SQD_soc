@@ -3,6 +3,7 @@
 # ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
+from IPython.display import clear_output
 
 # ===================================================================
 # 2. QICK Libraries
@@ -182,24 +183,53 @@ class Amp_Rabi:
                 final_delay=self.cfg["relax_delay"],
                 cfg=self.cfg,
             )
-            iq_list = prog.acquire(self.soc, soft_avgs=py_avg, progress=True)
+            iq_list = prog.acquire(self.soc, rounds=py_avg, progress=True)
             self.iqdata = iq_list[0][0].dot([1, 1j])
             self.gains = prog.get_pulse_param("qubit_pulse", "gain", as_array=True)
+
+    def auto(self, py_avg):
+        prog = AmplitudeRabiProgram(
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
+        )
+
+        prog.acquire(self.soc, rounds=py_avg, progress=True, step_rounds=True)
+
+        if not hasattr(prog, "rounds_pbar") or prog.rounds_pbar.disable:
+            try:
+                iq_list = prog.finish_acquire()
+            except Exception:
+                iq_list = None
+
+        else:
+            pbar = prog.rounds_pbar
+
+            while prog.finish_round():
+                prog.prepare_round()
+
+            try:
+                pbar.n = pbar.total
+                pbar.refresh()
+
+                pbar.close()
+                pbar.display(None)
+
+                clear_output(wait=True)
+            except Exception:
+                pass
+
+            iq_list = prog.finish_acquire()
+
+        self.iqdata = iq_list[0][0].dot([1, 1j])
+        self.gains = prog.get_pulse_param("qubit_pulse", "gain", as_array=True)
 
     def plot(self):
         pi_gain, pi2_gain = amprabi_analyze(self.gains, self.iqdata)
         return pi_gain, pi2_gain
 
     def liveplot(self, py_avg):
-        iq = 0
-
-        marker_style = {
-            "marker": "o",
-            "markersize": 5,
-            "alpha": 0.7,
-            "linestyle": "-",
-        }
-
         prog = AmplitudeRabiProgram(
             self.soccfg,
             reps=self.cfg["reps"],

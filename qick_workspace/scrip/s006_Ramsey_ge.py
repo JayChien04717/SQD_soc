@@ -3,6 +3,7 @@
 # ===================================================================
 import matplotlib.pyplot as plt
 import numpy as np
+from IPython.display import clear_output
 
 # ===================================================================
 # 2. QICK Libraries
@@ -214,6 +215,44 @@ class Ramsey:
             self.iq_list = prog.acquire(self.soc, rounds=py_avg, progress=True)
             self.iqdata = self.iq_list[0][0].dot([1, 1j])
             self.delay_times = prog.get_time_param("wait", "t", as_array=True)
+
+    def auto(self, py_avg):
+        prog = RamseyProgram(
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
+        )
+
+        prog.acquire(self.soc, rounds=py_avg, progress=True, step_rounds=True)
+
+        if not hasattr(prog, "rounds_pbar") or prog.rounds_pbar.disable:
+            try:
+                iq_list = prog.finish_acquire()
+            except Exception:
+                iq_list = None
+
+        else:
+            pbar = prog.rounds_pbar
+
+            while prog.finish_round():
+                prog.prepare_round()
+
+            try:
+                pbar.n = pbar.total
+                pbar.refresh()
+
+                pbar.close()
+                pbar.display(None)
+
+                clear_output(wait=True)
+            except Exception:
+                pass
+
+            iq_list = prog.finish_acquire()
+
+        self.iqdata = iq_list[0][0].dot([1, 1j])
+        self.delay_times = prog.get_time_param("wait", "t", as_array=True)
 
     def plot(self):
         T2fring_analyze(self.delay_times, self.iqdata, prefix="Ramsey")

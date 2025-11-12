@@ -24,7 +24,7 @@ readout_cfg = {
     "ro_length": 5.0,  # [us]
     "mixer_freq": 5600,  # [MHz] - used for mux_ch and interpolated_ch
     # Changes related to the resonator output channel
-    "res_freq_ge": [7062, 7326, 7454.8, 5797.46, 5917.51, 6051.89],  # [MHzx]
+    "res_freq_ge": [5351, 7326, 7454.8, 5797.46, 5917.51, 6051.89],  # [MHzx]
     "res_gain_ge": [0.001, 0.001, 0.001, 0.001, 0.001, 0.001],  # [DAC units]
     "res_freq_ef": [5000, 5100, 5200, 5300, 5400, 5500],  # [MHz]
     "res_gain_ef": [0.05, 0.05, 0.05, 0.05, 0.05, 0.05],  # [DAC units]

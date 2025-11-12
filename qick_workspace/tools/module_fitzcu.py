@@ -74,7 +74,7 @@ def resonator_circlefit(x: float, y: float, solve_type: str = "hm") -> Optional[
         fitting result, data contain Qc, Qi, Ql .ect.
     """
     fit = analyze(x * 1e6, y, solve_type, fit_edelay=True)
-    fit.plot()
+    # fit.plot()
     param = fit.tolist()
     result_dict = {
         "Fres(GHz)": round(param[0] / 1e9, 4),
@@ -162,7 +162,7 @@ def spectrum_analyze(x: np.ndarray, y: np.ndarray, fit: bool = True) -> Optional
     res: Optional[float] = None  # Initialize resonance frequency variable
 
     if fit:
-        pOpt, _ = fitlor(x, data)
+        pOpt, pCov, fitparams = fitlor(x, data)
         res = pOpt[2]  # Extract resonance frequency
 
         plt.plot(x, lorfunc(x, *pOpt), label="Fit")

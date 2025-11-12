@@ -163,7 +163,7 @@ def _liveplot_sw_avg(
             else:
                 plot_artist.set_ydata(data)
                 # Dynamically rescale Y-axis to fit new data
-                ax.set_ylim(np.min(data) * 0.98, np.max(data) * 1.02)
+                ax.set_ylim(np.min(data) * 0.97, np.max(data) * 1.02)
 
             ax.set_title(f"{title_prefix} | Average: {current_i + 1} / {py_avg}")
             # Force a refresh of the displayed figure in the notebook
@@ -298,7 +298,13 @@ def _liveplot_sweep_yoko(
     plot_y_vals = x_axis_vals
     dynamic_y_label = x_label
 
-    mesh = ax.pcolormesh(plot_x_vals, plot_y_vals, data_to_plot.T, shading="nearest", cmap="viridis",)
+    mesh = ax.pcolormesh(
+        plot_x_vals,
+        plot_y_vals,
+        data_to_plot.T,
+        shading="nearest",
+        cmap="viridis",
+    )
 
     ax.set_xlabel(dynamic_x_label)
     ax.set_ylabel(dynamic_y_label)

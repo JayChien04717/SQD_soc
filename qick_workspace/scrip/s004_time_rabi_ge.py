@@ -186,14 +186,22 @@ class Time_Rabi:
         )
 
         ### Final plot ###
-        self.fit_params, error, fig = plot_final(
-            self.time_step, self.iqdata, "Times(us)", fitdecaysin, decaysin
+        self.fit_params, error, fig, ax = plot_final(
+            self.time_step,
+            self.iqdata,
+            "Times(us)",
+            fitdecaysin,
+            decaysin,
+            return_ax=True,
         )
         fig.suptitle(f"Time Rabi ge, Rabi frequency = {self.fit_params[1]:.3f} MHz")
         fig.tight_layout()
-        pi_gain, pi2_gain = fix_phase(self.fit_params)
+        pi_len, pi2_len = fix_phase(self.fit_params)
+        ax.axvline(pi_len, color="red", linestyle="--", label=r"$\pi$ length")
+        ax.axvline(pi2_len, color="red", linestyle="--", label=r"$\pi/2$ length")
+        ax.legend()
 
-        return round(pi_gain, 6), round(pi2_gain, 6)
+        return round(pi_len, 3), round(pi2_len, 3)
 
     def saveLabber(self, qb_idx, yoko_value=None):
         expt_name = "004_time_rabi_ge" + f"_Q{qb_idx}"

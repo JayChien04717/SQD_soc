@@ -1,0 +1,17 @@
+{
+    "timestamp": "2025-11-13-12:24:23",
+    "instrument": {
+        "yoko_mode": "A",
+        "yoko_unit_scaled": "-2.10 mA"
+    },
+    "calibration_results": {
+        "resonator_frequency_MHz": 5351.4593,
+        "qubit_frequency_MHz": 4614.121058,
+        "rabi_pi_gain": 0.7277306352567534,
+        "rabi_pi2_gain": 0.37949572370766105,
+        "sigma": 0.025,
+        "T2_ramsey_us": 1.804465782462334,
+        "T2_echo_us": 3.328593908982572,
+        "T1_us": 7.553471429075717
+    }
+}

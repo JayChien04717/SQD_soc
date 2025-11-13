@@ -167,30 +167,24 @@ class Qubit_Twotone:
 
         prog.acquire(self.soc, rounds=py_avg, progress=True, step_rounds=True)
 
-        if not hasattr(prog, "rounds_pbar") or prog.rounds_pbar.disable:
-            try:
-                iq_list = prog.finish_acquire()
-            except Exception:
-                iq_list = None
+        pbar = prog.rounds_pbar
+        pbar.set_description("Qubit ge Spectrum auto calibration")
 
-        else:
-            pbar = prog.rounds_pbar
+        while prog.finish_round():
+            prog.prepare_round()
 
-            while prog.finish_round():
-                prog.prepare_round()
+        try:
+            pbar.n = pbar.total
+            pbar.refresh()
 
-            try:
-                pbar.n = pbar.total
-                pbar.refresh()
+            pbar.close()
+            pbar.display(None)
 
-                pbar.close()
-                pbar.display(None)
+            clear_output(wait=True)
+        except Exception:
+            pass
 
-                clear_output(wait=True)
-            except Exception:
-                pass
-
-            iq_list = prog.finish_acquire()
+        iq_list = prog.finish_acquire()
 
         self.iqdata = iq_list[0][0].dot([1, 1j])
         self.freqs = prog.get_pulse_param("qubit_pulse", "freq", as_array=True)

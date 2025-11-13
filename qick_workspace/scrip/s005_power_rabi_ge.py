@@ -197,30 +197,23 @@ class Amp_Rabi:
 
         prog.acquire(self.soc, rounds=py_avg, progress=True, step_rounds=True)
 
-        if not hasattr(prog, "rounds_pbar") or prog.rounds_pbar.disable:
-            try:
-                iq_list = prog.finish_acquire()
-            except Exception:
-                iq_list = None
+        pbar = prog.rounds_pbar
+        pbar.set_description("Power Rabi ge auto calibration")
+        while prog.finish_round():
+            prog.prepare_round()
 
-        else:
-            pbar = prog.rounds_pbar
+        try:
+            pbar.n = pbar.total
+            pbar.refresh()
 
-            while prog.finish_round():
-                prog.prepare_round()
+            pbar.close()
+            pbar.display(None)
 
-            try:
-                pbar.n = pbar.total
-                pbar.refresh()
+            clear_output(wait=True)
+        except Exception:
+            pass
 
-                pbar.close()
-                pbar.display(None)
-
-                clear_output(wait=True)
-            except Exception:
-                pass
-
-            iq_list = prog.finish_acquire()
+        iq_list = prog.finish_acquire()
 
         self.iqdata = iq_list[0][0].dot([1, 1j])
         self.gains = prog.get_pulse_param("qubit_pulse", "gain", as_array=True)

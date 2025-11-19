@@ -2,7 +2,7 @@ import sys
 import pyvisa as visa
 import numpy as np
 import time
-
+from tqdm.auto import tqdm
 
 class YOKOGS200:
     _rampstep = 1e-4  # 0.0001 #0.001 # increment step when setting voltage/current
@@ -39,7 +39,7 @@ class YOKOGS200:
         tempvolts = np.linspace(start, stop, num=steps + 1, endpoint=True)
         # print(tempvolts)
         self.OutputOn()
-        for tempvolt in tempvolts:
+        for tempvolt in tqdm(tempvoltsdesc="Setting Voltage", leave=False):
             self.session.write(":SOURce:LEVel:AUTO %.8f" % tempvolt)
             time.sleep(self._rampinterval)
 
@@ -51,7 +51,7 @@ class YOKOGS200:
         steps = max(1, round(abs(stop - start) / _rampstep))
         tempcurrents = np.linspace(start, stop, num=steps)
         self.OutputOn()
-        for tempcurrent in tempcurrents:
+        for tempcurrent in tqdm(tempcurrents, desc="Setting Current", leave=False):
             self.session.write(":SOURce:LEVel:AUTO %.8f" % tempcurrent)
             time.sleep(self._rampinterval)
 

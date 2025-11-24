@@ -141,7 +141,9 @@ class TOF:
 
         try:
             for i in tqdm(range(py_avg), desc="Software Average Count"):
-                self.iq_list = prog.acquire_decimated(self.soc, rounds=1)
+                self.iq_list = prog.acquire_decimated(
+                    self.soc, rounds=1, progress=False
+                )
 
                 current_iq_data = self.iq_list[0].dot([1, 1j])
 

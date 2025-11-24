@@ -1,13 +1,90 @@
-import os
-import h5py
-import numpy as np
 import datetime
 import json
-import re
-from typing import Dict, Any, Union, Optional
-import re
-import Labber
 import math
+import os
+import pprint
+import re
+from collections import defaultdict
+from typing import Any, Dict, List, Optional, Union
+
+import h5py
+import numpy as np
+from addict import Dict as AddictDict
+
+try:
+    import Labber
+except ImportError:
+    print("No Labber module")
+
+
+# =============================================================================
+# HDF5 / File Management Utilities
+# =============================================================================
+
+
+def get_next_filename(base_path: str, exp_name: str, suffix: str = ".h5") -> str:
+    """
+    Generate a unique filename for an experiment, ensuring no duplicates.
+    Files are saved in a directory structure: base_path/YYYY/MM/MM-DD/
+    """
+    today = datetime.date.today()
+    year, month, day = today.strftime("%Y"), today.strftime("%m"), today.strftime("%d")
+    date_path = f"{month}-{day}"
+
+    experiment_path = os.path.join(base_path, year, month, date_path)
+    os.makedirs(experiment_path, exist_ok=True)
+
+    i = 1
+    while True:
+        fname = f"{exp_name}_{i}{suffix}"
+        full_path = os.path.join(experiment_path, fname)
+        if not os.path.exists(full_path):
+            return full_path
+        i += 1
+
+
+def get_next_filename_labber(
+    dest_path: str, exp_name: str, yoko_value: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Generates the next HDF5 filename.
+    Files are saved in the directory for the current date.
+    """
+    # 1. Ensure dest_path is absolute and create today's save directory
+    dest_path = os.path.abspath(dest_path)
+    yy, mm, dd = datetime.datetime.today().strftime("%Y-%m-%d").split("-")
+    save_path = os.path.join(dest_path, yy, mm, f"Data_{mm}{dd}")
+    os.makedirs(save_path, exist_ok=True)
+
+    # 2. Check Yoko mode.
+    if yoko_value is not None:
+        try:
+            value = yoko_value["value"]
+            value = auto_unit(value)
+            unit = yoko_value["unit"]
+            filename = f"{exp_name}_{value['value']:.2f}{value['unit']}{unit}"
+            return os.path.join(save_path, filename)
+        except KeyError:
+            raise ValueError(
+                "yoko_value dictionary must contain 'value' and 'unit' keys"
+            )
+
+    else:
+        # 3. Normal (index) mode
+        max_index = 0
+        pattern = re.compile(rf"^{re.escape(exp_name)}_(\d+)\.hdf5$")
+
+        for root, dirs, files in os.walk(dest_path):
+            for f in files:
+                match = pattern.match(f)
+                if match:
+                    current_index = int(match.group(1))
+                    if current_index > max_index:
+                        max_index = current_index
+
+        next_index = max_index + 1
+        final_filename = f"{exp_name}_{next_index:03d}"
+        return os.path.join(save_path, final_filename)
 
 
 def hdf5_generator(
@@ -18,6 +95,9 @@ def hdf5_generator(
     comment=None,
     tag=None,
 ):
+    """
+    Create a Labber-compatible LogFile for data.
+    """
     np.float = float
     np.bool = bool
     zdata = z_info["values"]
@@ -39,183 +119,6 @@ def hdf5_generator(
         fObj.setTags(tag)
 
 
-def update_python_dict(
-    file_path: str, updates: Dict[str, Union[Any, Dict[int, Any]]]
-) -> None:
-    """
-    Update dictionary values inside a Python config file while preserving formatting and comments.
-
-    Supports updating specific indices in lists instead of overwriting the entire list.
-
-    Args:
-        file_path (str): Path to the Python configuration file.
-        updates (Dict[str, Union[Any, Dict[int, Any]]]): Dictionary of updates.
-            - Example 1: {"readout_cfg.mixer_freq": 5800}  (Normal update)
-            - Example 2: {"qubit_cfg.qubit_freq_ge": {2: 4500}}  (Update list index 2)
-
-    Returns:
-        None
-    """
-    with open(file_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    new_lines = []
-    # Track which dictionary we are modifying
-    inside_target: Optional[str] = None
-
-    for line in lines:
-        stripped = line.strip()
-        modified = False
-
-        # Detect dictionary entry
-        for full_key, new_value in updates.items():
-            # "qubit_cfg.qubit_freq_ge" → ("qubit_cfg", "qubit_freq_ge")
-            dict_name, key = full_key.split(".", 1)
-
-            if stripped.startswith(f"{dict_name} = {{"):
-                inside_target = dict_name
-
-            # Only process lines inside the target dictionary
-            if inside_target and re.match(rf'^\s*"{key}"\s*:\s*', stripped):
-                if isinstance(new_value, dict):  # If updating a list index
-                    match = re.search(rf'"{key}"\s*:\s*(\[[^\]]*\])', stripped)
-                    if match:
-                        # Convert text to Python list
-                        old_list = eval(match.group(1))
-                        for idx, val in new_value.items():
-                            if 0 <= idx < len(old_list):
-                                # Update only the specified index
-                                old_list[idx] = val
-                        new_list_str = str(old_list).replace(
-                            "'", ""
-                        )  # Format correctly
-                        line = re.sub(
-                            rf'"{key}"\s*:\s*\[[^\]]*\]',
-                            f'"{key}": {new_list_str}',
-                            line,
-                        )
-
-                else:  # Normal value update
-                    line = re.sub(
-                        rf'("{key}"\s*:\s*)[^,]*',
-                        lambda m: f"{m.group(1)}{new_value}",
-                        line,
-                    )
-
-        new_lines.append(line)
-
-        # Exit dictionary when closing `}`
-        if inside_target and stripped == "}":
-            inside_target = None
-
-    # Write back to file
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
-
-
-def select_config_idx(config: dict, idx: int) -> dict:
-    selected = {}
-    for key, value in config.items():
-        if isinstance(value, list):
-            if idx < len(value):
-                selected[key] = value[idx]
-            else:
-                raise IndexError(f"Index {idx} out of range for key '{key}'")
-        else:
-            selected[key] = value
-    return selected
-
-
-def get_next_filename(base_path: str, exp_name: str, suffix: str = ".h5") -> str:
-    """
-    Generate a unique filename for an experiment, ensuring no duplicates.
-
-    Args:
-        base_path (str): Base directory for saving the file.
-        exp_name (str): Experiment name.
-        suffix (str): File extension, default is ".h5".
-
-    Returns:
-        str: The next available filename.
-    """
-    today = datetime.date.today()
-    year, month, day = today.strftime("%Y"), today.strftime("%m"), today.strftime("%d")
-    date_path = f"{month}-{day}"  # Format MM-DD
-
-    experiment_path = os.path.join(base_path, year, month, date_path)
-    os.makedirs(experiment_path, exist_ok=True)
-
-    i = 1
-    while True:
-        fname = f"{exp_name}_{i}{suffix}"
-        full_path = os.path.join(experiment_path, fname)
-        if not os.path.exists(full_path):
-            return full_path
-        i += 1
-
-
-
-def get_next_filename_labber(
-    dest_path: str, exp_name: str, yoko_value: Optional[Dict[str, Any]] = None
-) -> str:
-    """
-    Generates the next HDF5 filename.
-
-    - If yoko_value is provided, returns a name based on that value.
-    - If yoko_value is None, recursively searches dest_path for the
-      highest index (exp_name_NNN.hdf5) and returns the next one.
-
-    Files are saved in the directory for the current date.
-    """
-
-    # 1. Ensure dest_path is absolute and create today's save directory
-    dest_path = os.path.abspath(dest_path)
-    yy, mm, dd = datetime.datetime.today().strftime("%Y-%m-%d").split("-")
-    save_path = os.path.join(dest_path, yy, mm, f"Data_{mm}{dd}")
-    os.makedirs(save_path, exist_ok=True)
-
-    # 2. Check Yoko mode.
-    if yoko_value is not None:
-        # Yoko mode: use the provided value and unit for the name.
-        # This logic does NOT use an incrementing index.
-        try:
-            value = yoko_value["value"]
-            value = auto_unit(value)
-            unit = yoko_value["unit"]
-            filename = f"{exp_name}_{value['value']:.2f}{value['unit']}{unit}"
-            return os.path.join(save_path, filename)
-        except KeyError:
-            # Handle cases where the dictionary is malformed
-            raise ValueError(
-                "yoko_value dictionary must contain 'value' and 'unit' keys"
-            )
-
-    else:
-        # 3. Normal (index) mode: Find the next available index recursively.
-        max_index = 0
-
-        # Regex to find files matching "exp_name_NNN.hdf5"
-        # This will *only* match files from the normal (non-yoko) mode.
-        pattern = re.compile(rf"^{re.escape(exp_name)}_(\d+)\.hdf5$")
-
-        # *** Core Change: Use os.walk to search all subdirectories ***
-        for root, dirs, files in os.walk(dest_path):
-            for f in files:
-                match = pattern.match(f)
-                if match:
-                    # match.group(1) is the number (e.g., '001')
-                    current_index = int(match.group(1))
-                    if current_index > max_index:
-                        max_index = current_index
-
-        # 4. Calculate the next index
-        next_index = max_index + 1
-
-        # 5. Return the new filename, formatted to 3 digits (e.g., _001, _002)
-        final_filename = f"{exp_name}_{next_index:03d}"
-        return os.path.join(save_path, final_filename)
-
-
 def saveh5(
     file_path: str,
     data_dict: Dict[str, Any],
@@ -223,13 +126,7 @@ def saveh5(
     result: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
-    Save experiment data to an HDF5 file.
-
-    Args:
-        file_path (str): Path to save the HDF5 file.
-        data_dict (Dict[str, Any]): Data to be stored.
-        config (Optional[Dict[str, Any]]): Configuration parameters.
-        result (Optional[Dict[str, Any]]): Experimental results.
+    Save experiment data to an HDF5 file with structured groups for x/y/z axes.
     """
     with h5py.File(file_path, "w") as f:
         param_grp = f.create_group("parameter")
@@ -260,13 +157,7 @@ def saveshot(
     result: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
-    Save experiment data to an HDF5 file.
-
-    Args:
-        file_path (str): Path to save the HDF5 file.
-        data_dict (Dict[str, Any]): Data to be stored.
-        config (Optional[Dict[str, Any]]): Configuration parameters.
-        result (Optional[Dict[str, Any]]): Experimental results.
+    Save experiment data to an HDF5 file, dumping all keys in data_dict to the 'data' group.
     """
     with h5py.File(file_path, "w") as f:
         data_grp = f.create_group("data")
@@ -285,13 +176,6 @@ def saveshot(
 def read_h5_file(file_path: str) -> Dict[str, Any]:
     """
     Read experiment data from an HDF5 file.
-
-    Args:
-        file_path (str): Path to the HDF5 file.
-
-    Returns:
-        Dict[str, Any]: Dictionary containing x_name, x_value, y_name
-        (if available), y_value (if available), z_value, config (if available), and result (if available).
     """
     data = {}
 
@@ -302,7 +186,6 @@ def read_h5_file(file_path: str) -> Dict[str, Any]:
         x_name, y_name = None, None
         x_value, y_value = None, None
 
-        # Identify which key contains x_axis_value and y_axis_value
         for key in param_grp.keys():
             subgroup = param_grp[key]
             if "x_axis_value" in subgroup:
@@ -312,14 +195,12 @@ def read_h5_file(file_path: str) -> Dict[str, Any]:
                 y_name = key
                 y_value = subgroup["y_axis_value"][:]
 
-        # Ensure x_name and x_value exist
         if x_name and x_value is not None:
             data["x_name"] = x_name
             data["x_value"] = np.asarray(x_value)
         else:
             raise ValueError("No x-axis data found in the HDF5 file.")
 
-        # Store y-axis data if available
         if y_name and y_value is not None:
             data["y_name"] = y_name
             data["y_value"] = np.asarray(y_value)
@@ -327,7 +208,6 @@ def read_h5_file(file_path: str) -> Dict[str, Any]:
             data["y_name"] = None
             data["y_value"] = None
 
-        # Extract z-axis data
         z_name = next(iter(data_grp.keys()), None)
         if z_name:
             data["z_name"] = z_name
@@ -335,7 +215,6 @@ def read_h5_file(file_path: str) -> Dict[str, Any]:
         else:
             raise ValueError("No z-axis data found in the HDF5 file.")
 
-        # Extract config and result if available
         data["experiment_name"] = (
             json.loads(f.attrs["experiment_name"])
             if "experiment_name" in f.attrs
@@ -347,7 +226,409 @@ def read_h5_file(file_path: str) -> Dict[str, Any]:
     return data
 
 
+# =============================================================================
+# Config / Dictionary Utilities
+# =============================================================================
+
+
+def update_python_dict(
+    file_path: str, updates: Dict[str, Union[Any, Dict[int, Any]]]
+) -> None:
+    """
+    Update dictionary values inside a Python config file while preserving formatting.
+    """
+    with open(file_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    new_lines = []
+    inside_target: Optional[str] = None
+
+    for line in lines:
+        stripped = line.strip()
+
+        for full_key, new_value in updates.items():
+            if "." in full_key:
+                dict_name, key = full_key.split(".", 1)
+            else:
+                continue
+
+            if stripped.startswith(f"{dict_name} = {{"):
+                inside_target = dict_name
+
+            if inside_target and re.match(rf'^\s*"{key}"\s*:\s*', stripped):
+                if isinstance(new_value, dict):
+                    match = re.search(rf'"{key}"\s*:\s*(\[[^\]]*\])', stripped)
+                    if match:
+                        old_list = eval(match.group(1))
+                        for idx, val in new_value.items():
+                            if 0 <= idx < len(old_list):
+                                old_list[idx] = val
+                        new_list_str = str(old_list).replace("'", "")
+                        line = re.sub(
+                            rf'"{key}"\s*:\s*\[[^\]]*\]',
+                            f'"{key}": {new_list_str}',
+                            line,
+                        )
+
+                else:
+                    line = re.sub(
+                        rf'("{key}"\s*:\s*)[^,]*',
+                        lambda m: f"{m.group(1)}{new_value}",
+                        line,
+                    )
+
+        new_lines.append(line)
+
+        if inside_target and stripped == "}":
+            inside_target = None
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+
+def collect_all_key_values(data):
+    """Recursively collects values for the same key."""
+    result = defaultdict(list)
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):
+                nested_results = collect_all_key_values(value)
+                for k, v_list in nested_results.items():
+                    result[k].extend(v_list)
+            else:
+                result[key].append(value)
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, (dict, list)):
+                nested_results = collect_all_key_values(item)
+                for k, v_list in nested_results.items():
+                    result[k].extend(v_list)
+    return result
+
+
+def refine_cfg(
+    collected_data: defaultdict,
+    keys_to_unify: List[str] = [
+        "reps",
+        "res_length",
+        "ro_length",
+        "trig_time",
+        "relax_delay",
+    ],
+) -> Dict[str, Any]:
+    """Unifies specified keys into scalars if values are identical."""
+    refined_dict = dict(collected_data)
+    for key, value_list in refined_dict.items():
+        if key in keys_to_unify and isinstance(value_list, list) and value_list:
+            unique_values = set(value_list)
+            if len(unique_values) == 1:
+                single_value = unique_values.pop()
+                if isinstance(single_value, np.generic):
+                    single_value = single_value.item()
+                refined_dict[key] = single_value
+    return refined_dict
+
+
+def select_config_idx(config: dict, idx: int) -> dict:
+    """Select configuration for a specific index."""
+    selected = {}
+    for key, value in config.items():
+        if isinstance(value, list):
+            if idx < len(value):
+                selected[key] = value[idx]
+            else:
+                raise IndexError(f"Index {idx} out of range for key '{key}'")
+        else:
+            selected[key] = value
+    return selected
+
+
+class ExperimentConfig:
+    """
+    A wrapper class to manage, query, and update nested experiment configurations.
+
+    Features:
+    - Unified access (Mux config) with dot notation support (Addict).
+    - Single qubit extraction (flat dict) with dot notation support.
+    - Unified update method for both single values and dictionary merging.
+    - Export to Python files (Full config or Single Qubit).
+    """
+
+    def __init__(
+        self,
+        data: Union[List, Dict],
+        keys_to_unify: Optional[List[str]] = None
+    ):
+        self._raw_list = data
+        self.keys_to_unify = keys_to_unify or [
+            "reps", "res_length", "ro_length", "trig_time", "relax_delay"
+        ]
+
+        # Create Name Map for quick lookup
+        self._name_map = {}
+        if isinstance(self._raw_list, list):
+            for idx, cfg in enumerate(self._raw_list):
+                name = cfg.get("name")
+                if name:
+                    self._name_map[name] = idx
+
+        self._refresh()
+
+    def _refresh(self) -> None:
+        """Recalculate the unified configuration after updates."""
+        self._raw_collected = self._collect_all_key_values(self._raw_list)
+        # Unified config is now an AddictDict for dot notation
+        self.unified_config = self._refine_cfg(self._raw_collected)
+
+    def get_qubit(self, q_id: Union[int, str]) -> AddictDict:
+        """
+        Retrieve a flattened configuration for a specific Qubit as an AddictDict.
+        Allows access via `config.name` or `config['name']`.
+        """
+        indices = self._resolve_indices(q_id)
+        idx = indices[0]
+
+        selected = AddictDict()
+        for key, value in self.unified_config.items():
+            if isinstance(value, list):
+                if idx < len(value):
+                    selected[key] = value[idx]
+            else:
+                selected[key] = value
+        return selected
+
+    def update(
+        self,
+        param: Union[str, Dict[str, Any]],
+        value: Any = None,
+        q_index: Union[int, str, List] = None,
+    ) -> None:
+        """
+        Unified update method.
+
+        Mode 1: Dictionary Merge
+            update(flat_dict, q_index="Q1")
+            Merges a flat dictionary into the nested structure of the target qubit(s).
+
+        Mode 2: Path Update
+            update("res.res_freq_ge", 5000, "Q1")
+            Updates a specific nested key using dot notation string.
+
+        Parameters
+        ----------
+        param : Union[str, Dict]
+            Either a key path string (e.g., 'res.freq') or a flat dictionary.
+        value : Any, optional
+            The value to set if param is a string. Ignored if param is a dict.
+        q_index : Union[int, str, List], optional
+            The target qubits. If None, targets all (broadcast/distribute).
+        """
+        target_indices = self._resolve_indices(q_index)
+
+        # --- Mode 1: Dictionary Merge ---
+        if isinstance(param, dict):
+            flat_config = param
+            updated_count = 0
+            for idx in target_indices:
+                raw_nested_cfg = self._raw_list[idx]
+                for k, v in flat_config.items():
+                    if self._recursive_update(raw_nested_cfg, k, v):
+                        updated_count += 1
+            if q_index is not None:
+                print(
+                    f"Merged dictionary into {q_index}. Updated {updated_count} parameters."
+                )
+
+        # --- Mode 2: Path Update ---
+        elif isinstance(param, str):
+            key_path = param
+            keys = key_path.split(".")
+
+            is_list_val = isinstance(value, (list, np.ndarray))
+            should_distribute = is_list_val and (len(value) == len(target_indices))
+
+            for i, cfg_idx in enumerate(target_indices):
+                cfg = self._raw_list[cfg_idx]
+                target = cfg
+
+                # Traverse to parent dict
+                for k in keys[:-1]:
+                    if isinstance(target, dict):
+                        target = target.setdefault(k, {})
+                    else:
+                        target = getattr(target, k)
+
+                # Determine value
+                val_to_set = value[i] if should_distribute else value
+                if isinstance(val_to_set, np.generic):
+                    val_to_set = val_to_set.item()
+
+                # Set value
+                if isinstance(target, dict):
+                    target[keys[-1]] = val_to_set
+                else:
+                    setattr(target, keys[-1], val_to_set)
+
+        else:
+            raise TypeError(
+                "First argument must be a string (key path) or a dict (config)."
+            )
+
+        self._refresh()
+
+    def _recursive_update(self, nested_data, target_key, new_value) -> bool:
+        """Helper to recursively find a key in nested structure and update it."""
+        found = False
+        if isinstance(nested_data, dict):
+            if target_key in nested_data:
+                old_val = nested_data[target_key]
+                val_to_set = new_value
+                if isinstance(val_to_set, np.generic):
+                    val_to_set = val_to_set.item()
+
+                if old_val != val_to_set:
+                    nested_data[target_key] = val_to_set
+                    return True
+                return False
+
+            for _, v in nested_data.items():
+                if isinstance(v, (dict, list)):
+                    if self._recursive_update(v, target_key, new_value):
+                        found = True
+        return found
+
+    def save_to_py(self, filename: str = "latest_cfg.py") -> None:
+        """Export full configuration list to file."""
+        clean_data = self._clean_data(self._raw_list)
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("# Auto-generated configuration file\n")
+            f.write("from addict import Dict\n\n")
+            f.write("config_list = ")
+            pprint.pprint(clean_data, stream=f, width=120, sort_dicts=False)
+            f.write("\n")
+        print(f"Configuration saved to {filename}")
+
+    def save_qubit_config(
+        self,
+        q_id: Union[int, str],
+        filename: Optional[str] = None,
+        var_name: str = "config",
+    ) -> None:
+        """
+        Export the configuration of a specific qubit to a Python file.
+        Saves the original nested dictionary structure.
+        """
+        # 1. Resolve index and get nested config
+        indices = self._resolve_indices(q_id)
+        target_idx = indices[0]
+        raw_nested_cfg = self._raw_list[target_idx]
+
+        # 2. Clean data
+        clean_data = self._clean_data(raw_nested_cfg)
+
+        # 3. Determine filename
+        if filename is None:
+            name = clean_data.get("name", f"Q{target_idx}")
+            filename = f"{name}_config.py"
+
+        # 4. Write to file
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(
+                f"# Auto-generated configuration file for {clean_data.get('name', q_id)}\n"
+            )
+            f.write("from addict import Dict\n\n")
+            f.write(f"{var_name} = ")
+            pprint.pprint(clean_data, stream=f, width=120, sort_dicts=False)
+            f.write("\n")
+
+        print(f"Saved {q_id} configuration to {filename}")
+
+    def _resolve_indices(self, q_identifier) -> List[int]:
+        """Resolve indices from int, str, list or None."""
+        if q_identifier is None:
+            return list(range(len(self._raw_list)))
+        if isinstance(q_identifier, (int, np.integer)):
+            return [int(q_identifier)]
+        if isinstance(q_identifier, str):
+            if q_identifier in self._name_map:
+                return [self._name_map[q_identifier]]
+            else:
+                raise ValueError(f"Qubit name '{q_identifier}' not found.")
+        if isinstance(q_identifier, list):
+            resolved = []
+            for x in q_identifier:
+                if isinstance(x, str) and x in self._name_map:
+                    resolved.append(self._name_map[x])
+                elif isinstance(x, (int, np.integer)):
+                    resolved.append(int(x))
+                else:
+                    raise ValueError(f"Invalid identifier: {x}")
+            return resolved
+        raise TypeError("Invalid q_index type.")
+
+    def _clean_data(self, data: Any) -> Any:
+        """Recursively clean data (Addict->dict, Numpy->native)."""
+        if isinstance(data, (dict, AddictDict)):
+            return {k: self._clean_data(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._clean_data(v) for v in data]
+        elif isinstance(data, np.generic):
+            return data.item()
+        return data
+
+    def _collect_all_key_values(self, data) -> defaultdict:
+        """Recursively collect all values for the same key."""
+        result = defaultdict(list)
+        if isinstance(data, (dict, AddictDict)):
+            for key, value in data.items():
+                if isinstance(value, (dict, list, AddictDict)):
+                    nested_results = self._collect_all_key_values(value)
+                    for k, v_list in nested_results.items():
+                        result[k].extend(v_list)
+                else:
+                    result[key].append(value)
+        elif isinstance(data, list):
+            for item in data:
+                if isinstance(item, (dict, list, AddictDict)):
+                    nested_results = self._collect_all_key_values(item)
+                    for k, v_list in nested_results.items():
+                        result[k].extend(v_list)
+        return result
+
+    def _refine_cfg(self, collected_data) -> AddictDict:
+        """Refine list to scalar and return as AddictDict."""
+        refined_dict = AddictDict(collected_data)
+        for key, value_list in refined_dict.items():
+            if (
+                key in self.keys_to_unify
+                and isinstance(value_list, list)
+                and value_list
+            ):
+                unique_values = set(value_list)
+                if len(unique_values) == 1:
+                    single_value = unique_values.pop()
+                    if isinstance(single_value, np.generic):
+                        single_value = single_value.item()
+                    refined_dict[key] = single_value
+        return refined_dict
+
+    def __getitem__(self, item):
+        if isinstance(item, str):
+            return self.unified_config.get(item)
+        if isinstance(item, int):
+            return self.get_qubit(item)
+        raise TypeError("Index must be int or str")
+
+
+# =============================================================================
+# Helper Utilities
+# =============================================================================
+
+
 def auto_unit(value, base_unit=""):
+    """
+    Automatically scale a value and add a metric prefix (e.g., k, M, G, m, u, n).
+    """
     prefixes = {
         -12: "p",  # pico
         -9: "n",  # nano
@@ -372,51 +653,3 @@ def auto_unit(value, base_unit=""):
     prefix = prefixes[exp]
 
     return {"unit": f"{prefix}{base_unit}", "value": scaled_value}
-
-
-if __name__ == "__main__":
-    # 設定實驗名稱與路徑
-    BASE_PATH = "data"
-    exp_name = "Experiment_Q1"
-    file_path = get_next_filename(BASE_PATH, exp_name)
-
-    data_dict = {
-        "x_name": "x_axis",
-        "x_value": np.linspace(0, 10, 5),
-        "y_name": "y_axis",
-        "y_value": np.linspace(0, 20, 4),
-        "z_name": "iq_list",
-        "z_value": np.outer(
-            np.sin(np.linspace(0, 10, 5)), np.cos(np.linspace(0, 20, 4))
-        ),
-    }
-
-    config = {"ro_ch": 0, "res_ch": 0}
-
-    result = {"T1": "350us", "T2": "130us"}
-
-    saveh5(file_path, data_dict, config, result)
-    print(f"Data saved to: {file_path}")
-
-    # # 讀取 HDF5 檔案
-    # loaded_data = readh5(r'F:\CODE\tprocv2_scrip\data\2025\02\02-03\Experiment_Q1_9.h5')
-    # print("Loaded Data:", loaded_data)
-
-    # # idx = 3
-    # # selected_config = select_config_idx(readout_cfg, qubit_cfg, idx=idx)
-    # # pprint(selected_config)
-
-    # QubitIndex = 4
-    # config = select_config_idx(readout_cfg, qubit_cfg, idx=QubitIndex)
-    # # Update parameters to see TOF pulse with your setup
-    # config.update([('res_freq', 7100), ('res_gain', 0.8), ('res_length', 0.5), ('ro_length', 1.5)])
-    # pprint(config)
-
-    # **示例：更新 readout_cfg["ro_length"] 和 qubit_cfg["qubit_freq_ge"]**
-    # updates = {
-    #     'readout_cfg["ro_length"]': "2.0",
-    #     'qubit_cfg["qubit_freq_ge"]': "[4500, 4600, 4700, 4800, 4900, 5100]"
-    # }
-
-    # update_python_dict(config_file, updates)
-    # print("Config updated successfully!")

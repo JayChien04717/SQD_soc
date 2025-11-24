@@ -554,18 +554,85 @@ class ExperimentConfig:
             indices = self._resolve_indices(q_id)
             if not indices:
                  raise ValueError(f"No qubit found for identifier {q_id}")
-            # Assuming we want the first match if multiple (though resolve_indices usually returns list)
-            # For specific qubit export, we usually want a single dict, not a list of 1 dict.
-            # But to be consistent with 'get_qubit', let's see.
-            # If q_id is provided, we probably want that specific qubit's config.
             target_idx = indices[0]
             clean_data = self._clean_data(self._raw_list[target_idx])
+            yaml_str = self._dump_dict_with_spacing(clean_data)
         else:
             clean_data = self._clean_data(self._raw_list)
-        
-        yaml_str = yaml.dump(clean_data, default_flow_style=False, sort_keys=False)
+            if isinstance(clean_data, list):
+                # Dump each item individually to control spacing
+                yaml_parts = []
+                for item in clean_data:
+                    # Dump as a list of one item to preserve the "- " prefix for the first key
+                    # But we want custom spacing inside the dict too.
+                    # So we construct the string manually for the list item structure
+                    
+                    # 1. Dump the first key-value pair with "- " prefix
+                    # We need to handle the dict content with spacing
+                    
+                    # Alternative approach:
+                    # Use yaml.dump for the structure but post-process? No, too risky.
+                    # Let's use the helper.
+                    
+                    part = self._dump_dict_with_spacing(item, is_list_item=True)
+                    yaml_parts.append(part)
+                
+                # 2 empty lines between list items -> 3 newlines
+                yaml_str = "\n\n\n".join(yaml_parts) + "\n"
+            else:
+                yaml_str = self._dump_dict_with_spacing(clean_data)
 
         return yaml_str
+
+    def _dump_dict_with_spacing(self, data: dict, is_list_item: bool = False) -> str:
+        """
+        Helper to dump a dictionary with conditional spacing.
+        - If a value is a dict (or next value is a dict), use 1 empty line separator.
+        - If both are scalars, use 0 empty lines (single newline).
+        If is_list_item is True, the first key is prefixed with "- ".
+        """
+        if not isinstance(data, dict):
+            return yaml.dump(data, default_flow_style=False, sort_keys=False).strip()
+
+        parts = []
+        keys = list(data.keys())
+        
+        for i, key in enumerate(keys):
+            val = data[key]
+            single_item = {key: val}
+            dumped = yaml.dump(single_item, default_flow_style=False, sort_keys=False).strip()
+            
+            if i == 0 and is_list_item:
+                part = "- " + dumped
+            else:
+                if is_list_item:
+                    # Indent by 2 spaces
+                    lines = dumped.split('\n')
+                    indented_lines = ["  " + line for line in lines]
+                    part = "\n".join(indented_lines)
+                else:
+                    part = dumped
+            
+            # Determine separator
+            if i < len(keys) - 1:
+                next_key = keys[i+1]
+                next_val = data[next_key]
+                
+                # Check if current or next value is a complex structure (dict or list)
+                # In this config, we mostly care about dicts.
+                is_complex = isinstance(val, (dict, list))
+                is_next_complex = isinstance(next_val, (dict, list))
+                
+                if is_complex or is_next_complex:
+                    separator = "\n\n"
+                else:
+                    separator = "\n"
+            else:
+                separator = ""
+            
+            parts.append(part + separator)
+
+        return "".join(parts)
 
     def to_yaml_file(self, filename: str, q_id: Union[int, str] = None):
         """

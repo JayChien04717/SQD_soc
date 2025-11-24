@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import h5py
 import numpy as np
+import yaml
 from addict import Dict as AddictDict
 
 try:
@@ -542,6 +543,42 @@ class ExperimentConfig:
             f.write("\n")
 
         print(f"Saved {q_id} configuration to {filename}")
+
+    def to_yaml(self, q_id: Union[int, str] = None) -> str:
+        """
+        Convert the configuration to YAML format.
+        Args:
+            q_id: Optional qubit identifier (name or index) to filter the output.
+        """
+        if q_id is not None:
+            indices = self._resolve_indices(q_id)
+            if not indices:
+                 raise ValueError(f"No qubit found for identifier {q_id}")
+            # Assuming we want the first match if multiple (though resolve_indices usually returns list)
+            # For specific qubit export, we usually want a single dict, not a list of 1 dict.
+            # But to be consistent with 'get_qubit', let's see.
+            # If q_id is provided, we probably want that specific qubit's config.
+            target_idx = indices[0]
+            clean_data = self._clean_data(self._raw_list[target_idx])
+        else:
+            clean_data = self._clean_data(self._raw_list)
+        
+        yaml_str = yaml.dump(clean_data, default_flow_style=False, sort_keys=False)
+
+        return yaml_str
+
+    def to_yaml_file(self, filename: str, q_id: Union[int, str] = None):
+        """
+        Convert the configuration to YAML format and save to a file.
+        Args:
+            filename: The file path to save to.
+            q_id: Optional qubit identifier (name or index) to filter the output.
+        """
+        yaml_str = self.to_yaml(q_id=q_id)
+        if filename:
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(yaml_str)
+            print(f"Configuration saved to {filename}")
 
     def _resolve_indices(self, q_identifier) -> List[int]:
         """Resolve indices from int, str, list or None."""

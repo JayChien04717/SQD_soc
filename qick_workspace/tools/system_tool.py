@@ -497,6 +497,13 @@ class ExperimentConfig:
                     if self._recursive_update(v, target_key, new_value):
                         found = True
         return found
+        
+    def read_config(self, q_id: Union[int, str]) -> Dict:
+        indices = self._resolve_indices(q_id)
+        target_idx = indices[0]
+        raw_nested_cfg = self._raw_list[target_idx]
+        clean_data = self._clean_data(raw_nested_cfg)
+        return clean_data
 
     def save_to_py(self, filename: str = "latest_cfg.py") -> None:
         """Export full configuration list to file."""
@@ -508,6 +515,16 @@ class ExperimentConfig:
             pprint.pprint(clean_data, stream=f, width=120, sort_dicts=False)
             f.write("\n")
         print(f"Configuration saved to {filename}")
+
+    def read_qubit_config(
+        self,
+        q_id: Union[int, str],
+    ) -> Dict:
+        indices = self._resolve_indices(q_id)
+        target_idx = indices[0]
+        raw_nested_cfg = self._raw_list[target_idx]
+        clean_data = self._clean_data(raw_nested_cfg)
+        return clean_data
 
     def save_qubit_config(
         self,

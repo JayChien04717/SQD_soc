@@ -29,17 +29,15 @@ class StateTomography(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         # --- Standardized Generator Declaration (from AllXY) ---
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
 
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
         # --- Standardized Readout Declaration (from AllXY) ---
         self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
@@ -67,44 +65,44 @@ class StateTomography(AveragerProgramV2):
             gain=cfg["res_gain_ge"],
         )
 
-        # --- Standardized Qubit Pulses (from AllXY) ---
+        # --- Standardized qb Pulses (from AllXY) ---
         self.add_gauss(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="ramp",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
             even_length=True,
         )
-        if cfg["qubit_ge_pulse_style"] == "arb":
+        if cfg["pulse_type"] == "arb":
             for name, phase, gain in [
-                ("x180", 0, cfg["qubit_pi_gain_ge"]),
-                ("y180", 90, cfg["qubit_pi_gain_ge"]),
-                ("x90", 0, cfg["qubit_pi2_gain_ge"]),
-                ("y90", 90, cfg["qubit_pi2_gain_ge"]),
+                ("x180", 0, cfg["pi_gain_ge"]),
+                ("y180", 90, cfg["pi_gain_ge"]),
+                ("x90", 0, cfg["pi2_gain_ge"]),
+                ("y90", 90, cfg["pi2_gain_ge"]),
             ]:
                 self.add_pulse(
-                    ch=qubit_ch,
+                    ch=qb_ch,
                     name=name,
                     style="arb",
                     envelope="ramp",
-                    freq=cfg["qubit_freq_ge"],
+                    freq=cfg["qb_freq_ge"],
                     phase=phase,
                     gain=gain,
                 )
 
-        elif cfg["qubit_ge_pulse_style"] == "flat_top":
+        elif cfg["pulse_type"] == "flat_top":
             for name, phase, gain in [
-                ("x180", 0, cfg["qubit_pi_gain_ge"]),
-                ("y180", 90, cfg["qubit_pi_gain_ge"]),
-                ("x90", 0, cfg["qubit_pi2_gain_ge"]),
-                ("y90", 90, cfg["qubit_pi2_gain_ge"]),
+                ("x180", 0, cfg["pi_gain_ge"]),
+                ("y180", 90, cfg["pi_gain_ge"]),
+                ("x90", 0, cfg["pi2_gain_ge"]),
+                ("y90", 90, cfg["pi2_gain_ge"]),
             ]:
                 self.add_pulse(
-                    ch=qubit_ch,
+                    ch=qb_ch,
                     name=name,
                     style="flat_top",
                     envelope="ramp",
-                    freq=cfg["qubit_freq_ge"],
+                    freq=cfg["qb_freq_ge"],
                     phase=phase,
                     gain=gain,
                     length=cfg["flat_top_len"],
@@ -113,13 +111,13 @@ class StateTomography(AveragerProgramV2):
         # --- Tomography-Specific Pulse (y90m) ---
         # (Assuming 'arb' style for simplicity, add flat_top if needed)
         self.add_pulse(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="y90m",
-            style="arb",  # or cfg["qubit_ge_pulse_style"]
+            style="arb",  # or cfg["pulse_type"]
             envelope="ramp",
-            freq=cfg["qubit_freq_ge"],
+            freq=cfg["qb_freq_ge"],
             phase=-90,
-            gain=cfg["qubit_pi2_gain_ge"],
+            gain=cfg["pi2_gain_ge"],
             # length=cfg.get("flat_top_len", 10), # Add if using flat_top
         )
 
@@ -193,20 +191,20 @@ class StateTomography(AveragerProgramV2):
 
         # 1. (Optional) Apply calibration pulse
         if cal_pulse == "x180":
-            self.pulse(ch=cfg["qubit_ch"], name="x180", t=0)
+            self.pulse(ch=cfg["qb_ch"], name="x180", t=0)
             self.delay_auto(0.05)
 
         # 2. (Optional) Apply state preparation pulse
         elif prep_pulse is not None and prep_pulse != "None":
-            self.pulse(ch=cfg["qubit_ch"], name=prep_pulse, t=0)
+            self.pulse(ch=cfg["qb_ch"], name=prep_pulse, t=0)
             self.delay_auto(0.05)
 
         # 3. Apply tomography pre-rotation
         if axis == "X":
-            self.pulse(ch=cfg["qubit_ch"], name="y90m", t=0)
+            self.pulse(ch=cfg["qb_ch"], name="y90m", t=0)
             self.delay_auto(0.01)
         elif axis == "Y":
-            self.pulse(ch=cfg["qubit_ch"], name="x90", t=0)
+            self.pulse(ch=cfg["qb_ch"], name="x90", t=0)
             self.delay_auto(0.01)
         elif axis == "Z":
             pass  # No rotation for Z measurement

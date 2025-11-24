@@ -612,15 +612,13 @@ class SingleShotProgram_g(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
         # pynq configured
         # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
@@ -663,15 +661,13 @@ class SingleShotProgram_e(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
         # pynq configured
         # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
@@ -704,39 +700,39 @@ class SingleShotProgram_e(AveragerProgramV2):
         )
 
         self.add_gauss(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="ramp",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
             even_length=True,
         )
-        if cfg["qubit_ge_pulse_style"] == "arb":
+        if cfg["pulse_type"] == "arb":
             self.add_pulse(
-                ch=qubit_ch,
-                name="qubit_pulse",
+                ch=qb_ch,
+                name="qb_pulse",
                 ro_ch=ro_ch,
                 style="arb",
                 envelope="ramp",
-                freq=cfg["qubit_freq_ge"],
-                phase=cfg["qubit_phase"],
-                gain=cfg["qubit_pi_gain_ge"],
+                freq=cfg["qb_freq_ge"],
+                phase=cfg["qb_phase"],
+                gain=cfg["pi_gain_ge"],
             )
-        elif cfg["qubit_ge_pulse_style"] == "flat_top":
+        elif cfg["pulse_type"] == "flat_top":
             self.add_pulse(
-                ch=qubit_ch,
-                name="qubit_pulse",
+                ch=qb_ch,
+                name="qb_pulse",
                 ro_ch=ro_ch,
                 style="flat_top",
                 envelope="ramp",
-                freq=cfg["qubit_freq_ge"],
-                phase=cfg["qubit_phase"],
-                gain=cfg["qubit_pi_gain_ge"],
-                length=cfg["qubit_flat_top_length_ge"],
+                freq=cfg["qb_freq_ge"],
+                phase=cfg["qb_phase"],
+                gain=cfg["pi_gain_ge"],
+                length=cfg["qb_flat_top_length_ge"],
             )
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
-        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_pulse", t=0)
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_pulse", t=0)
         self.delay_auto(0.01, tag="wait")
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
@@ -746,15 +742,13 @@ class SingleShotProgram_f(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qmixer_freq"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
         # pynq configured
         # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
@@ -787,48 +781,48 @@ class SingleShotProgram_f(AveragerProgramV2):
         )
 
         self.add_gauss(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="ramp_ge",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
             even_length=True,
         )
         self.add_pulse(
-            ch=qubit_ch,
-            name="qubit_ge_pulse",
+            ch=qb_ch,
+            name="qb_ge_pulse",
             ro_ch=ro_ch,
             style="arb",
             envelope="ramp_ge",
-            freq=cfg["qubit_freq_ge"],
-            phase=cfg["qubit_phase"],
-            gain=cfg["qubit_pi_gain_ge"],
+            freq=cfg["qb_freq_ge"],
+            phase=cfg["qb_phase"],
+            gain=cfg["pi_gain_ge"],
         )
 
         self.add_gauss(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="ramp_ef",
             sigma=cfg["sigma"],
             length=cfg["sigma_ef"] * 5,
             even_length=True,
         )
         self.add_pulse(
-            ch=qubit_ch,
-            name="qubit_ef_pulse",
+            ch=qb_ch,
+            name="qb_ef_pulse",
             ro_ch=ro_ch,
             style="arb",
             envelope="ramp_ef",
-            freq=cfg["qubit_freq_ef"],
-            phase=cfg["qubit_phase"],
-            gain=cfg["qubit_pi_gain_ef"],
+            freq=cfg["qb_freq_ef"],
+            phase=cfg["qb_phase"],
+            gain=cfg["pi_gain_ef"],
         )
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
-        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_ge_pulse", t=0)
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_ge_pulse", t=0)
         self.delay_auto(0.01, tag="wait1")
-        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_ef_pulse", t=0)
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_ef_pulse", t=0)
         self.delay_auto(0.01)
-        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_ge_pulse", t=0)
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_ge_pulse", t=0)
         self.delay_auto(0.01)
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
@@ -896,7 +890,7 @@ class SingleShot_gef:
         )
 
     def saveLabber(self, qb_idx, yoko_value=None):
-        expt_name = "s000_singleshot" + f"_Q{qb_idx}"
+        expt_name = "s000_singleshot" + f"_{qb_idx}"
         file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
 
         print("Current data file: " + file_path)

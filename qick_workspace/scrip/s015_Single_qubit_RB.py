@@ -332,17 +332,15 @@ class RBProgram(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         # --- Standardized Generator Declaration ---
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
 
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
         # --- Standardized Readout Declaration ---
         self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
@@ -370,9 +368,9 @@ class RBProgram(AveragerProgramV2):
             gain=cfg["res_gain_ge"],
         )
 
-        # --- Standardized Qubit Pulses (RB-specific) ---
+        # --- Standardized qb Pulses (RB-specific) ---
         self.add_gauss(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="ramp",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
@@ -381,38 +379,38 @@ class RBProgram(AveragerProgramV2):
 
         # Define RB pulse properties
         pulse_list = [
-            ("X", 0, cfg["qubit_pi_gain_ge"]),
-            ("-X", 0, -cfg["qubit_pi_gain_ge"]),
-            ("X/2", 0, cfg["qubit_pi2_gain_ge"]),
-            ("-X/2", 0, -cfg["qubit_pi2_gain_ge"]),
-            ("Y", 90, cfg["qubit_pi_gain_ge"]),
-            ("-Y", 90, -cfg["qubit_pi_gain_ge"]),
-            ("Y/2", 90, cfg["qubit_pi2_gain_ge"]),
-            ("-Y/2", 90, -cfg["qubit_pi2_gain_ge"]),
+            ("X", 0, cfg["pi_gain_ge"]),
+            ("-X", 0, -cfg["pi_gain_ge"]),
+            ("X/2", 0, cfg["pi2_gain_ge"]),
+            ("-X/2", 0, -cfg["pi2_gain_ge"]),
+            ("Y", 90, cfg["pi_gain_ge"]),
+            ("-Y", 90, -cfg["pi_gain_ge"]),
+            ("Y/2", 90, cfg["pi2_gain_ge"]),
+            ("-Y/2", 90, -cfg["pi2_gain_ge"]),
             ("I", 0, 0),  # Add Identity
             ("-I", 0, 0),  # Add Identity
         ]
 
-        if cfg["qubit_ge_pulse_style"] == "arb":
+        if cfg["pulse_type"] == "arb":
             for name, phase, gain in pulse_list:
                 self.add_pulse(
-                    ch=qubit_ch,
+                    ch=qb_ch,
                     name=name,
                     style="arb",
                     envelope="ramp",
-                    freq=cfg["qubit_freq_ge"],
+                    freq=cfg["qb_freq_ge"],
                     phase=phase,
                     gain=gain,
                 )
 
-        elif cfg["qubit_ge_pulse_style"] == "flat_top":
+        elif cfg["pulse_type"] == "flat_top":
             for name, phase, gain in pulse_list:
                 self.add_pulse(
-                    ch=qubit_ch,
+                    ch=qb_ch,
                     name=name,
                     style="flat_top",
                     envelope="ramp",
-                    freq=cfg["qubit_freq_ge"],
+                    freq=cfg["qb_freq_ge"],
                     phase=phase,
                     gain=gain,
                     length=cfg["flat_top_len"],
@@ -488,7 +486,7 @@ class RBProgram(AveragerProgramV2):
             if i == "I" or i == "-I":
                 self.delay_auto(cfg["sigma"] * 5)
             else:
-                self.pulse(ch=self.cfg["qubit_ch"], name=f"{i}", t=0)
+                self.pulse(ch=self.cfg["qb_ch"], name=f"{i}", t=0)
                 self.delay_auto(0.01)  # Small delay between pulses
 
         # --- Readout ---

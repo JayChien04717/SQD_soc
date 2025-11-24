@@ -33,16 +33,14 @@ class T1Program(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
 
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
         # pynq configured
         # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
 
@@ -74,34 +72,34 @@ class T1Program(AveragerProgramV2):
         )
 
         self.add_gauss(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="ramp",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
             even_length=True,
         )
-        if cfg["qubit_ge_pulse_style"] == "arb":
+        if cfg["pulse_type"] == "arb":
             self.add_pulse(
-                ch=qubit_ch,
-                name="qubit_pulse",
+                ch=qb_ch,
+                name="qb_pulse",
                 ro_ch=ro_ch,
                 style="arb",
                 envelope="ramp",
-                freq=cfg["qubit_freq_ge"],
-                phase=cfg["qubit_phase"],
-                gain=cfg["qubit_pi_gain_ge"],
+                freq=cfg["qb_freq_ge"],
+                phase=cfg["qb_phase"],
+                gain=cfg["pi_gain_ge"],
             )
-        elif cfg["qubit_ge_pulse_style"] == "flat_top":
+        elif cfg["pulse_type"] == "flat_top":
             self.add_pulse(
-                ch=qubit_ch,
-                name="qubit_pulse",
+                ch=qb_ch,
+                name="qb_pulse",
                 ro_ch=ro_ch,
                 style="flat_top",
                 envelope="ramp",
-                freq=cfg["qubit_freq_ge"],
-                phase=cfg["qubit_phase"],
-                gain=cfg["qubit_pi_gain_ge"],
-                length=cfg["qubit_flat_top_length_ge"],
+                freq=cfg["qb_freq_ge"],
+                phase=cfg["qb_phase"],
+                gain=cfg["pi_gain_ge"],
+                length=cfg["qb_flat_top_length_ge"],
             )
 
     def apply_cool(self, cfg):
@@ -164,7 +162,7 @@ class T1Program(AveragerProgramV2):
             self.pulse(ch=self.cfg["cool_ch2"], name="cool_pulse2", t=0)
             self.delay_auto(0.5, tag="Ring down")
 
-        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_pulse", t=0)
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_pulse", t=0)
         self.delay_auto(cfg["wait_time"] + 0.05, tag="wait")
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
@@ -256,7 +254,7 @@ class T1:
         fig.tight_layout()
 
     def saveLabber(self, qb_idx, yoko_value=None):
-        expt_name = "s008_T1_ge" + f"_Q{qb_idx}"
+        expt_name = "s008_T1_ge" + f"_{qb_idx}"
         file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
 
         try:

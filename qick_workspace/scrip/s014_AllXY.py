@@ -51,16 +51,14 @@ class AllXYprogram(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        # self.declare_gen(ch=qubit_ch, nqz=cfg['nqz_qubit'])
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        # self.declare_gen(ch=qb_ch, nqz=cfg['nqz_qb'])
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
         self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
 
@@ -88,42 +86,42 @@ class AllXYprogram(AveragerProgramV2):
         )
 
         self.add_gauss(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="ramp",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
             even_length=True,
         )
-        if cfg["qubit_ge_pulse_style"] == "arb":
+        if cfg["pulse_type"] == "arb":
             for name, phase, gain in [
-                ("x180", 0, cfg["qubit_pi_gain_ge"]),
-                ("y180", 9, cfg["qubit_pi_gain_ge"]),
-                ("x90", 0, cfg["qubit_pi2_gain_ge"]),
-                ("y90", 90, cfg["qubit_pi2_gain_ge"]),
+                ("x180", 0, cfg["pi_gain_ge"]),
+                ("y180", 9, cfg["pi_gain_ge"]),
+                ("x90", 0, cfg["pi2_gain_ge"]),
+                ("y90", 90, cfg["pi2_gain_ge"]),
             ]:
                 self.add_pulse(
-                    ch=qubit_ch,
+                    ch=qb_ch,
                     name=name,
                     style="arb",
                     envelope="ramp",
-                    freq=cfg["qubit_freq_ge"],
+                    freq=cfg["qb_freq_ge"],
                     phase=phase,
                     gain=gain,
                 )
 
-        elif cfg["qubit_ge_pulse_style"] == "flat_top":
+        elif cfg["pulse_type"] == "flat_top":
             for name, phase, gain in [
-                ("x180", 0, cfg["qubit_pi_gain_ge"]),
-                ("y180", 9, cfg["qubit_pi_gain_ge"]),
-                ("x90", 0, cfg["qubit_pi2_gain_ge"]),
-                ("y90", 90, cfg["qubit_pi2_gain_ge"]),
+                ("x180", 0, cfg["pi_gain_ge"]),
+                ("y180", 9, cfg["pi_gain_ge"]),
+                ("x90", 0, cfg["pi2_gain_ge"]),
+                ("y90", 90, cfg["pi2_gain_ge"]),
             ]:
                 self.add_pulse(
-                    ch=qubit_ch,
+                    ch=qb_ch,
                     name=name,
                     style="flat_top",
                     envelope="ramp",
-                    freq=cfg["qubit_freq_ge"],
+                    freq=cfg["qb_freq_ge"],
                     phase=phase,
                     gain=gain,
                     length=cfg["flat_top_len"],
@@ -195,16 +193,12 @@ class AllXYprogram(AveragerProgramV2):
         if cfg["allxy_gates"][0] == "I":
             pass
         else:
-            self.pulse(
-                ch=self.cfg["qubit_ch"], name=f"{self.cfg['allxy_gates'][0]}", t=0
-            )
+            self.pulse(ch=self.cfg["qb_ch"], name=f"{self.cfg['allxy_gates'][0]}", t=0)
         self.delay_auto(0.01)
         if cfg["allxy_gates"][1] == "I":
             pass
         else:
-            self.pulse(
-                ch=self.cfg["qubit_ch"], name=f"{self.cfg['allxy_gates'][1]}", t=0
-            )
+            self.pulse(ch=self.cfg["qb_ch"], name=f"{self.cfg['allxy_gates'][1]}", t=0)
 
         ## readout pulse ##
         self.delay_auto(0.05)

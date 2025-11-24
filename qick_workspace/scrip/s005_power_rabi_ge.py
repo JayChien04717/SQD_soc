@@ -33,16 +33,14 @@ class AmplitudeRabiProgram(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
 
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
         self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
         self.add_readoutconfig(
@@ -71,34 +69,34 @@ class AmplitudeRabiProgram(AveragerProgramV2):
         )
 
         self.add_gauss(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="ramp",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
             even_length=True,
         )
-        if cfg["qubit_ge_pulse_style"] == "arb":
+        if cfg["pulse_type"] == "arb":
             self.add_pulse(
-                ch=qubit_ch,
-                name="qubit_pulse",
+                ch=qb_ch,
+                name="qb_pulse",
                 style="arb",
                 envelope="ramp",
-                freq=cfg["qubit_freq_ge"],
-                phase=cfg["qubit_phase"],
-                gain=cfg["qubit_gain_ge"],
+                freq=cfg["qb_freq_ge"],
+                phase=cfg["qb_phase"],
+                gain=cfg["qb_gain_ge"],
             )
-        elif cfg["qubit_ge_pulse_style"] == "flat_top":
-            if cfg["qubit_flat_top_length_ge"] is None:
-                raise ValueError("Please set qubit_flat_top_length_ge in config")
+        elif cfg["pulse_type"] == "flat_top":
+            if cfg["qb_flat_top_length_ge"] is None:
+                raise ValueError("Please set qb_flat_top_length_ge in config")
             self.add_pulse(
-                ch=qubit_ch,
-                name="qubit_pulse",
+                ch=qb_ch,
+                name="qb_pulse",
                 style="flat_top",
                 envelope="ramp",
-                freq=cfg["qubit_freq_ge"],
-                phase=cfg["qubit_phase"],
-                gain=cfg["qubit_gain_ge"],
-                length=cfg["qubit_flat_top_length_ge"],
+                freq=cfg["qb_freq_ge"],
+                phase=cfg["qb_phase"],
+                gain=cfg["qb_gain_ge"],
+                length=cfg["qb_flat_top_length_ge"],
             )
 
     def apply_cool(self, cfg):
@@ -161,7 +159,7 @@ class AmplitudeRabiProgram(AveragerProgramV2):
             self.pulse(ch=self.cfg["cool_ch2"], name="cool_pulse2", t=0)
             self.delay_auto(0.5, tag="Ring down")
 
-        self.pulse(ch=cfg["qubit_ch"], name="qubit_pulse", t=0)
+        self.pulse(ch=cfg["qb_ch"], name="qb_pulse", t=0)
         self.delay_auto(t=0.05, tag="waiting")
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
@@ -185,7 +183,7 @@ class Amp_Rabi:
             )
             iq_list = prog.acquire(self.soc, rounds=py_avg, progress=True)
             self.iqdata = iq_list[0][0].dot([1, 1j])
-            self.gains = prog.get_pulse_param("qubit_pulse", "gain", as_array=True)
+            self.gains = prog.get_pulse_param("qb_pulse", "gain", as_array=True)
 
     def auto(self, py_avg):
         prog = AmplitudeRabiProgram(
@@ -216,7 +214,7 @@ class Amp_Rabi:
         iq_list = prog.finish_acquire()
 
         self.iqdata = iq_list[0][0].dot([1, 1j])
-        self.gains = prog.get_pulse_param("qubit_pulse", "gain", as_array=True)
+        self.gains = prog.get_pulse_param("qb_pulse", "gain", as_array=True)
 
     def plot(self):
         pi_gain, pi2_gain = amprabi_analyze(self.gains, self.iqdata)
@@ -229,7 +227,7 @@ class Amp_Rabi:
             final_delay=self.cfg["relax_delay"],
             cfg=self.cfg,
         )
-        self.gains = prog.get_pulse_param("qubit_pulse", "gain", as_array=True)
+        self.gains = prog.get_pulse_param("qb_pulse", "gain", as_array=True)
 
         iqdata, interrupted, avg_count = liveplotfun(
             prog=prog,
@@ -275,7 +273,7 @@ class Amp_Rabi:
         expt_name = "s005_power_rabi_ge" + f"_Q{qb_idx}"
         file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
         try:
-            self.cfg.pop("qubit_gain_ge")
+            self.cfg.pop("qb_gain_ge")
         except:
             pass
 

@@ -32,16 +32,14 @@ class LengthRabiProgram(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
 
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
         self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
         self.add_readoutconfig(
@@ -67,21 +65,21 @@ class LengthRabiProgram(AveragerProgramV2):
             gain=cfg["res_gain_ge"],
         )
         self.add_gauss(
-            ch=qubit_ch,
-            name="qubit",
+            ch=qb_ch,
+            name="qb",
             sigma=cfg["sigma"],
             length=5 * cfg["sigma"],
             even_length=True,
         )
         self.add_pulse(
-            ch=qubit_ch,
-            name="qubit_pulse",
+            ch=qb_ch,
+            name="qb_pulse",
             style="flat_top",
-            envelope="qubit",
-            length=cfg["qubit_length_ge"],
-            freq=cfg["qubit_freq_ge"],
+            envelope="qb",
+            length=cfg["qb_length_ge"],
+            freq=cfg["qb_freq_ge"],
             phase=0,
-            gain=cfg["qubit_gain_ge"],
+            gain=cfg["qb_gain_ge"],
         )
 
     def apply_cool(self, cfg):
@@ -129,7 +127,7 @@ class LengthRabiProgram(AveragerProgramV2):
             self.delay_auto(0.5, tag="Ring down")
         else:
             pass
-        self.pulse(ch=cfg["qubit_ch"], name="qubit_pulse", t=0)  # play probe pulse
+        self.pulse(ch=cfg["qb_ch"], name="qb_pulse", t=0)  # play probe pulse
 
         self.delay_auto(t=0.05, tag="waiting")
 
@@ -158,14 +156,14 @@ class Time_Rabi:
             )
             iq_list = prog.acquire(self.soc, soft_avgs=py_avg, progress=True)
             self.iqdata = iq_list[0][0].dot([1, 1j])
-            self.gains = prog.get_pulse_param("qubit_pulse", "gain", as_array=True)
+            self.gains = prog.get_pulse_param("qb_pulse", "gain", as_array=True)
 
     def plot(self):
-        lengthrabi_analyze(self.time_step, self.iqlst)
+        lengthrabi_analyze(self.time_step, self.iqdata)
 
     def liveplot(self, py_avg, time_axis):
         def create_rabi_prog(length_val):
-            self.cfg["qubit_length_ge"] = length_val
+            self.cfg["qb_length_ge"] = length_val
             return LengthRabiProgram(
                 self.soccfg,
                 reps=self.cfg["reps"],

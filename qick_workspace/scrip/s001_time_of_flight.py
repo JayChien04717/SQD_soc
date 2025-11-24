@@ -141,7 +141,9 @@ class TOF:
 
         try:
             for i in tqdm(range(py_avg), desc="Software Average Count"):
-                self.iq_list = prog.acquire_decimated(self.soc, rounds=1)
+                self.iq_list = prog.acquire_decimated(
+                    self.soc, rounds=1, progress=False
+                )
 
                 current_iq_data = self.iq_list[0].dot([1, 1j])
 
@@ -155,7 +157,6 @@ class TOF:
                 plot_data_abs = np.abs(self.iqdata)
                 line.set_ydata(plot_data_abs)
 
-                # --- 修正後的 Y 軸動態範圍調整 (確保能看到數據變化) ---
                 current_min, current_max = np.min(plot_data_abs), np.max(plot_data_abs)
                 range_span = current_max - current_min
                 if range_span == 0:
@@ -196,7 +197,7 @@ class TOF:
             final_ax.set_title(title_text)
             final_ax.set_xlabel("Time ($\mu$s)")
             final_ax.set_ylabel("ADC unit")
-            final_ax.set_xlim(t_min, t_max)  # 應用最終 X-axis limit
+            final_ax.set_xlim(t_min, t_max)
             final_ax.legend()
             display(final_fig)
             plt.close(final_fig)
@@ -206,7 +207,7 @@ class TOF:
         return self.iqdata, not interrupted, i + 1
 
     def saveLabber(self, qb_idx):
-        expt_name = "s001_tof" + f"_Q{qb_idx}"
+        expt_name = "s001_tof" + f"_{qb_idx}"
         file_path = get_next_filename_labber(DATA_PATH, expt_name)
         hdf5_generator(
             filepath=file_path,
@@ -214,7 +215,7 @@ class TOF:
             z_info={
                 "name": "Signal",
                 "unit": "ADC unit",
-                "values": self.iq_list[0].dot([1, 1j]),
+                "values": self.iqdata,
             },
             comment=(),
             tag="TOF",

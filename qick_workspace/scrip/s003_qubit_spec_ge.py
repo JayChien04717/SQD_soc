@@ -32,15 +32,13 @@ class PulseProbeSpectroscopyProgram(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
         self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
 
@@ -68,21 +66,21 @@ class PulseProbeSpectroscopyProgram(AveragerProgramV2):
             gain=cfg["res_gain_ge"],
         )
         self.add_gauss(
-            ch=qubit_ch,
-            name="qubit",
+            ch=qb_ch,
+            name="qb",
             sigma=cfg["sigma"],
             length=5 * cfg["sigma"],
             even_length=True,
         )
         self.add_pulse(
-            ch=qubit_ch,
-            name="qubit_pulse",
+            ch=qb_ch,
+            name="qb_pulse",
             style="flat_top",
-            envelope="qubit",
-            length=cfg["qubit_length_ge"],
-            freq=cfg["qubit_freq_ge"],
+            envelope="qb",
+            length=cfg["qb_length_ge"],
+            freq=cfg["qb_freq_ge"],
             phase=0,
-            gain=cfg["qubit_gain_ge"],
+            gain=cfg["qb_gain_ge"],
         )
 
     def apply_cool(self, cfg):
@@ -131,7 +129,7 @@ class PulseProbeSpectroscopyProgram(AveragerProgramV2):
         else:
             pass
 
-        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_pulse", t=0)  # play probe pulse
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_pulse", t=0)  # play probe pulse
         self.delay_auto(0.05)
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
@@ -155,7 +153,7 @@ class Qubit_Twotone:
             )
             iq_list = prog.acquire(self.soc, rounds=py_avg, progress=True)
             self.iqdata = iq_list[0][0].dot([1, 1j])
-            self.freqs = prog.get_pulse_param("qubit_pulse", "freq", as_array=True)
+            self.freqs = prog.get_pulse_param("qb_pulse", "freq", as_array=True)
 
     def auto(self, py_avg):
         prog = PulseProbeSpectroscopyProgram(
@@ -200,7 +198,7 @@ class Qubit_Twotone:
             final_delay=self.cfg["relax_delay"],
             cfg=self.cfg,
         )
-        self.freqs = prog.get_pulse_param("qubit_pulse", "freq", as_array=True)
+        self.freqs = prog.get_pulse_param("qb_pulse", "freq", as_array=True)
 
         iqdata, interrupted, avg_count = liveplotfun(
             prog=prog,
@@ -236,10 +234,10 @@ class Qubit_Twotone:
         return round(resonance_freq, 6)
 
     def saveLabber(self, qb_idx, yoko_value=None):
-        expt_name = "003_qubit_spec_ge" + f"_Q{qb_idx}"
+        expt_name = "003_qubit_spec_ge" + f"_{qb_idx}"
         file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
         try:
-            self.cfg.pop("qubit_freq_ge")
+            self.cfg.pop("qb_freq_ge")
         except:
             pass
 

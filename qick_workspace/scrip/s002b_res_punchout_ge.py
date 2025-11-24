@@ -136,7 +136,7 @@ class SingleToneSpectroscopyPunchout:
             )
 
     def saveLabber(self, qb_idx, yoko_value=None):
-        expt_name = "002b_res_ge_punchout" + f"_Q{qb_idx}"
+        expt_name = "002b_res_ge_punchout" + f"_{qb_idx}"
         file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
         try:
             self.cfg.pop("res_freq_ge")

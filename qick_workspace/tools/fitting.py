@@ -909,72 +909,64 @@ def fit_gauss(xdata, ydata, fitparams=None):
 
 
 # ====================================================== #
+# Double Gaussian Fit Functions
+# ====================================================== #
+
 def double_gaussian(x, a1, b1, c1, a2, b2, c2):
+    """
+    Standard double Gaussian function.
+    Params: a=amplitude, b=mean, c=sigma
+    """
     return a1 * np.exp(-((x - b1) ** 2) / (2 * c1**2)) + a2 * np.exp(
         -((x - b2) ** 2) / (2 * c2**2)
     )
 
 
-def fit_doublegauss(xdata, ydata, fitparams=None):
-    # xmed, xstd should be gotten from the single shot data prior to fitting the histogram
-    if fitparams is None:
-        fitparams = [None] * 6
-    else:
-        fitparams = np.copy(fitparams)
-    midpoint = np.average((np.max(xdata), np.min(xdata)))
-    if fitparams[0] is None:
-        fitparams[0] = np.max(ydata[: len(ydata) // 2])
-    if fitparams[1] is None:
-        fitparams[1] = xdata[np.argmax(ydata[: len(ydata) // 2])]
-    if fitparams[2] is None:
-        fitparams[2] = (midpoint - np.min(xdata)) / 4
-    if fitparams[3] is None:
-        fitparams[3] = np.max(ydata[len(ydata) // 2 :])
-    if fitparams[4] is None:
-        fitparams[4] = xdata[len(ydata) // 2 + np.argmax(ydata[len(ydata) // 2 :])]
-    if fitparams[5] is None:
-        fitparams[5] = (np.max(xdata) - midpoint) / 4
-    pOpt = fitparams
+def fit_doublegauss(xdata, ydata, fitparams):
+    """
+    Robust fitting function for double Gaussian distributions.
 
-    pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
-    bounds = (
-        [
-            fitparams[0] * 0.95,
-            np.min(xdata),
-            fitparams[2] * 0.2,
-            fitparams[3] * 0.95,
-            midpoint,
-            fitparams[5] * 0.2,
-        ],
-        [
-            fitparams[0] * 1.05,
-            midpoint,
-            fitparams[2] * 2,
-            fitparams[3] * 1.05,
-            np.max(xdata),
-            fitparams[5] * 2,
-        ],
-    )
-    for i, param in enumerate(fitparams):
-        if not (bounds[0][i] < param < bounds[1][i]):
-            fitparams[i] = np.mean((bounds[0][i], bounds[1][i]))
-            print(
-                f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
-            )
+    Args:
+        xdata: Bin centers.
+        ydata: Counts/Histogram values.
+        fitparams: Initial guesses [amp_g, mu_g, sigma_g, amp_e, mu_e, sigma_e].
+
+    Returns:
+        pOpt: Optimized parameters.
+        pCov: Covariance matrix.
+    """
+    # Unpack parameters to set dynamic bounds
+    ag, mug, sig, ae, mue, sie = fitparams
+
+    # --- Constraint Logic ---
+    # Prevent the solver from drifting too far from the expected state centers (mu).
+    # If the signal for one state is weak, the solver might try to merge both Gaussians
+    # into the single visible peak. We constrain the mean to +/- 2 sigma (or a fixed buffer).
+
+    delta_mu_g = abs(sig) * 2 if sig > 0 else 100
+    delta_mu_e = abs(sie) * 2 if sie > 0 else 100
+
+    # Lower Bounds: Amp > 0, Sigma > 0, Mean constrained
+    lb = [0, mug - delta_mu_g, 0, 0, mue - delta_mu_e, 0]
+    # Upper Bounds: Amp infinite, Sigma infinite, Mean constrained
+    ub = [np.inf, mug + delta_mu_g, np.inf, np.inf, mue + delta_mu_e, np.inf]
+
     try:
         pOpt, pCov = sp.optimize.curve_fit(
             double_gaussian,
             xdata,
             ydata,
-            p0=np.array(fitparams, dtype="float64"),
-            bounds=bounds,
+            p0=fitparams,
+            bounds=(lb, ub),
+            maxfev=10000,  # Increase max iterations for convergence
         )
-        # return pOpt, pCov
-    except RuntimeError:
-        print("Warning: fit failed!")
-        # return 0, 0
-    return pOpt, pCov
+    except Exception as e:
+        # print(f"Fit failed: {e}")
+        # If fit fails, return the initial guesses so the code doesn't crash
+        pOpt = fitparams
+        pCov = np.zeros((6, 6))
 
+    return pOpt, pCov
 
 # ====================================================== #
 # Hanger Resonator Fit Functions

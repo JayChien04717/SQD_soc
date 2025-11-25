@@ -1,25 +1,24 @@
-# ===================================================================
-# 1. Standard & Third-Party Scientific Libraries
-# ===================================================================
-import matplotlib.pyplot as plt
-import numpy as np
-from scipy.integrate import quad
-from tqdm.auto import tqdm
-
-# ===================================================================
-# 2. QICK Libraries
-# ===================================================================
+# ----- Qick package ----- #
+from tabnanny import verbose
 from qick import *
 from qick.pyro import make_proxy
-from qick.asm_v2 import AveragerProgramV2, QickSpan, QickSweep1D
+from qick.asm_v2 import AveragerProgramV2
+from qick.asm_v2 import QickSpan, QickSweep1D
 
-# ===================================================================
-# 3. User/Local Libraries
-# ===================================================================
-from ..tools.system_cfg import *
-from ..tools.system_cfg import DATA_PATH
-from ..tools.system_tool import get_next_filename_labber, hdf5_generator
-from ..tools.fitting import fit_doublegauss, double_gaussian
+# ----- Library ----- #
+import matplotlib.pyplot as plt
+import numpy as np
+from tqdm.auto import tqdm
+
+# ----- User Library ----- #
+from .system_cfg import *
+from .system_cfg import DATA_PATH
+from .system_tool import get_next_filename_labber, hdf5_generator
+from .yamltool import yml_comment
+
+# from .singleshotplot import hist
+from .fitting import fit_doublegauss, double_gaussian
+from scipy.integrate import quad
 
 ##################
 # plot hist
@@ -190,7 +189,11 @@ def general_hist(
     y_max = 0
     n_tot_g = [0] * numbins
     n_tot_e = [0] * numbins
-    if fit:
+
+    # FIX: Create a flag to ensure fitting runs if either fit=True OR overlap=True
+    do_fit = fit or gauss_overlap
+
+    if do_fit:
         popts = [None] * len(state_labels)
         pcovs = [None] * len(state_labels)
 
@@ -217,14 +220,16 @@ def general_hist(
             print(state_label, "unrotated averages:")
             if not amplitude_mode:
                 print(
-                    f"I {xavg} +/- {np.std(I)} \t Q {yavg} +/- {np.std(Q)} \t Amp {amp_avg} +/- {np.std(amp)}"
+                    f"I {xavg:.3f} +/- {np.std(I):.3f} \t Q {yavg:.3f} +/- {np.std(Q):.3f} \t Amp {amp_avg:.3f} +/- {np.std(amp):.3f}"
                 )
-                print(f"Rotated (theta={theta}):")
                 print(
-                    f"I {xavg_new} +/- {np.std(I_new)} \t Q {yavg_new} +/- {np.std(Q_new)} \t Amp {np.abs(xavg_new + 1j * yavg_new)} +/- {np.std(amp)}"
+                    f"Rotated (theta={theta:.3f}):"
+                )  # Assuming theta also needs limiting
+                print(
+                    f"I {xavg_new:.3f} +/- {np.std(I_new):.3f} \t Q {yavg_new:.3f} +/- {np.std(Q_new):.3f} \t Amp {np.abs(xavg_new + 1j * yavg_new):.3f} +/- {np.std(amp):.3f}"
                 )
             else:
-                print(f"Amps {amp_avg} +/- {np.std(amp)}")
+                print(f"Amps {amp_avg:.3f} +/- {np.std(amp):.3f}")
 
         if plot:
             axs[0, 0].scatter(
@@ -315,71 +320,147 @@ def general_hist(
         n_diff = np.abs((n_g_0 - n_g_1))
         n_diff_qnd = np.sum(n_diff) / 2 / np.sum(n_g_0)
 
-    if fit:
-        xmax_g = bins_g[np.argmax(n_tot_g)]
-        xmax_e = bins_e[np.argmax(n_tot_e)]
+    # FIX: Use do_fit flag here
+    if do_fit:
+            # 1. Determine Global Anchors
+            # Use the total accumulated histograms (n_tot_g, n_tot_e) to find the
+            # robust locations of the Ground (g) and Excited (e) states.
+            # This prevents the fitter from getting lost on individual shots with low populations.
+            xmax_g = bins_g[np.argmax(n_tot_g)]
+            xmax_e = bins_e[np.argmax(n_tot_e)]
+            
+            # 2. Estimate Sigma Dynamically
+            # Calculate the distance between G and E. A good rule of thumb is that 
+            # the peaks are separated by roughly 4 to 6 sigmas.
+            dist_ge = abs(xmax_e - xmax_g)
+            if dist_ge > 0:
+                sigma_guess = dist_ge / 6.0
+            else:
+                # Fallback: use a fraction of the total span
+                sigma_guess = (bins[-1] - bins[0]) / 20.0
 
-        # a bit stupid but we need to know what the g and e states are to fit the gaussians, and
-        # that requires having already looped through all the states once
-        for check_i, data_check in enumerate(iqshots):
-            state_label = state_labels[check_i]
+            # Safety check to prevent division by zero
+            if sigma_guess < 1e-3: sigma_guess = 1.0
 
-            I, Q = data_check
+            for check_i, data_check in enumerate(iqshots):
+                state_label = state_labels[check_i]
+                I, Q = data_check
+                
+                # --- Data Rotation & Preparation ---
+                I_new = I * np.cos(theta) - Q * np.sin(theta)
+                Q_new = I * np.sin(theta) + Q * np.cos(theta)
+                amp = np.abs(I_new + 1j * Q_new)
 
-            xavg, yavg = np.average(I), np.average(Q)
+                target_data = amp if amplitude_mode else I_new
+                n, bins = np.histogram(target_data, bins=numbins, range=xlims)
+                
+                # Use Bin Centers (more accurate than edges for curve fitting)
+                bin_centers = (bins[:-1] + bins[1:]) / 2
 
-            """Rotate the IQ data"""
-            I_new = I * np.cos(theta) - Q * np.sin(theta)
-            Q_new = I * np.sin(theta) + Q * np.cos(theta)
-            amp = np.abs(I_new + 1j * Q_new)
+                # --- Smart Initial Guesses ---
+                # Instead of searching for peaks in this specific trace (which might lack one state),
+                # we look up the amplitude at the *known* global G and E positions.
+                
+                # Find indices in current bins closest to global xmax_g/e
+                idx_g = np.argmin(np.abs(bin_centers - xmax_g))
+                idx_e = np.argmin(np.abs(bin_centers - xmax_e))
+                
+                # Read height at those positions
+                ymax_g_guess = n[idx_g]
+                ymax_e_guess = n[idx_e]
 
-            n, bins = np.histogram(
-                I_new if not amplitude_mode else amp, bins=numbins, range=xlims
+                # Ensure guess is non-zero for log-likelihood stability
+                if ymax_g_guess < 1: ymax_g_guess = 1
+                if ymax_e_guess < 1: ymax_e_guess = 1
+
+                # Construct parameters: [Amp_g, Mean_g, Sigma_g, Amp_e, Mean_e, Sigma_e]
+                # Note: We use the GLOBAL xmax_g/e as the mean guess.
+                fitparams = [
+                    ymax_g_guess, xmax_g, sigma_guess, 
+                    ymax_e_guess, xmax_e, sigma_guess
+                ]
+
+                # Perform the Fit
+                popt, pcov = fit_doublegauss(xdata=bin_centers, ydata=n, fitparams=fitparams)
+
+                if plot:
+                    # Generate the fitted curve
+                    y_fit = double_gaussian(bin_centers, *popt)
+                    
+                    # Normalize the curve for plotting if necessary
+                    # (Adjust this based on whether your 'plot_hist' function normalizes the data)
+                    if normalize:
+                        y_fit_norm = y_fit / y_fit.sum()
+                    else:
+                        y_fit_norm = y_fit
+
+                    # Plot the fitted curve
+                    axs[1, 0].plot(
+                        bin_centers,
+                        y_fit_norm,
+                        "-",
+                        linewidth=2.0,
+                        color=default_colors[check_i % len(default_colors)],
+                        alpha=0.8,
+                        label=f"{state_label} fit"
+                    )
+
+                    # --- Calculate Gaussian Overlap Fidelity ---
+                    _, b1, c1, _, b2, c2 = popt
+                    
+                    # Helper to calc PDF
+                    def gaussian_pdf(x, mean, sigma):
+                        return (1 / (sigma * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mean) / sigma) ** 2)
+
+                    # Helper to find intersection
+                    def overlap_integrand(x):
+                        return np.minimum(gaussian_pdf(x, b1, c1), gaussian_pdf(x, b2, c2))
+                    
+                    # Integrate over a relevant range (5 sigmas)
+                    int_min = min(b1 - 5*c1, b2 - 5*c2)
+                    int_max = max(b1 + 5*c1, b2 + 5*c2)
+                    
+                    area, _ = quad(overlap_integrand, int_min, int_max)
+                    gauss_fit_fidelity = 1 - area
+
+                popts[check_i] = popt
+                pcovs[check_i] = pcov
+
+        if plot:
+            y = double_gaussian(bins[:-1], *popt)
+            y_norm = y / y.sum()
+
+            axs[1, 0].plot(
+                bins[:-1],
+                y_norm,
+                "-",
+                color=default_colors[check_i % len(default_colors)],
             )
 
-            idx_g = np.argmin(np.abs(bins[:-1] - xmax_g))
-            idx_e = np.argmin(np.abs(bins[:-1] - xmax_e))
-            ymax_g = n[idx_g]
-            ymax_e = n[idx_e]
-            fitparams = [ymax_g, xmax_g, 5, ymax_e, xmax_e, 5]
+            def gaussian_norm(x, b, c):
+                a = 1 / (np.sqrt(2 * np.pi) * c)
+                return a * np.exp(-((x - b) ** 2) / (2 * c**2))
 
-            popt, pcov = fit_doublegauss(xdata=bins[:-1], ydata=n, fitparams=fitparams)
+            def overlap_area_norm(b1, c1, b2, c2):
+                def min_func(x):
+                    return np.minimum(
+                        gaussian_norm(x, b1, c1), gaussian_norm(x, b2, c2)
+                    )
 
-            if plot:
-                y = double_gaussian(bins[:-1], *popt)
-                y_norm = y / y.sum()
+                x_min = min(b1 - 5 * c1, b2 - 5 * c2)
+                x_max = max(b1 + 5 * c1, b2 + 5 * c2)
+                area, _ = quad(min_func, x_min, x_max)
+                return area
 
-                axs[1, 0].plot(
-                    bins[:-1],
-                    y_norm,
-                    "-",
-                    color=default_colors[check_i % len(default_colors)],
-                )
+            def readout_fidelity_norm(b1, c1, b2, c2):
+                overlap = overlap_area_norm(b1, c1, b2, c2)
+                return 1 - overlap
 
-                def gaussian_norm(x, b, c):
-                    a = 1 / (np.sqrt(2 * np.pi) * c)
-                    return a * np.exp(-((x - b) ** 2) / (2 * c**2))
+            _, b1, c1, _, b2, c2 = popt
+            gauss_fit_fidelity = readout_fidelity_norm(b1, c1, b2, c2)
 
-                def overlap_area_norm(b1, c1, b2, c2):
-                    def min_func(x):
-                        return np.minimum(
-                            gaussian_norm(x, b1, c1), gaussian_norm(x, b2, c2)
-                        )
-
-                    x_min = min(b1 - 5 * c1, b2 - 5 * c2)
-                    x_max = max(b1 + 5 * c1, b2 + 5 * c2)
-                    area, _ = quad(min_func, x_min, x_max)
-                    return area
-
-                def readout_fidelity_norm(b1, c1, b2, c2):
-                    overlap = overlap_area_norm(b1, c1, b2, c2)
-                    return 1 - overlap
-
-                _, b1, c1, _, b2, c2 = popt
-                gauss_fit_fidelity = readout_fidelity_norm(b1, c1, b2, c2)
-
-            popts[check_i] = popt
-            pcovs[check_i] = pcov
+        popts[check_i] = popt
+        pcovs[check_i] = pcov
 
     """Compute the fidelity using overlap of the histograms"""
     fids = []
@@ -419,6 +500,7 @@ def general_hist(
             "$\overline{F}_{g" + e_label + "}$" if fid_avg else "$F_{g" + e_label + "}$"
         )
         if gauss_overlap:
+            # gauss_fit_fidelity is now guaranteed to be defined because do_fit ensured the block ran
             axs[1, 0].set_title(f"{title}: {100 * gauss_fit_fidelity:.3}%", fontsize=13)
         else:
             axs[1, 0].set_title(f"{title}: {100 * fids[0]:.3}%", fontsize=13)
@@ -453,23 +535,25 @@ def general_hist(
         return_data += [popts, pcovs]
     if check_qnd:
         return_data += [n_diff_qnd]
-
-    print(f"fidelity:{fids} \nthressholds:{thresholds} \ntheta:{theta * 180 / np.pi}")
-    gg = 100 * (1 - n_tot_g[tind:].sum() / n_tot_g.sum())
-    ge = 100 * (n_tot_g[tind:].sum() / n_tot_g.sum())
-    eg = 100 * (1 - n_tot_e[tind:].sum() / n_tot_e.sum())
-    ee = 100 * (n_tot_e[tind:].sum() / n_tot_e.sum())
-    print(f"""
-        Fidelity Matrix:
-        -----------------
-        | {gg:.3f}% | {ge:.3f}% |
-        ----------------
-        | {eg:.3f}% | {ee:.3f}% |
-        -----------------
-        IQ plane rotated by: {180 / np.pi * theta:.1f}{chr(176)}
-        Threshold: {thresholds[0]:.3e}
-        Fidelity: {100 * fids[0]:.3f}%
-        """)
+    if verbose:
+        print(
+            f"fidelity:{fids} \nthressholds:{thresholds} \ntheta:{theta * 180 / np.pi}"
+        )
+        gg = 100 * (1 - n_tot_g[tind:].sum() / n_tot_g.sum())
+        ge = 100 * (n_tot_g[tind:].sum() / n_tot_g.sum())
+        eg = 100 * (1 - n_tot_e[tind:].sum() / n_tot_e.sum())
+        ee = 100 * (n_tot_e[tind:].sum() / n_tot_e.sum())
+        print(f"""
+            Fidelity Matrix:
+            -----------------
+            | {gg:.3f}% | {ge:.3f}% |
+            ----------------
+            | {eg:.3f}% | {ee:.3f}% |
+            -----------------
+            IQ plane rotated by: {180 / np.pi * theta:.1f}{chr(176)}
+            Threshold: {thresholds[0]:.3e}
+            Fidelity: {100 * fids[0]:.3f}%
+            """)
     return return_data
 
 
@@ -612,13 +696,15 @@ class SingleShotProgram_g(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qb_ch = cfg["qb_ch"]
+        qubit_ch = cfg["qubit_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
+        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(
+                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
+            )
         else:
-            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
+            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
 
         # pynq configured
         # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
@@ -661,13 +747,15 @@ class SingleShotProgram_e(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qb_ch = cfg["qb_ch"]
+        qubit_ch = cfg["qubit_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
+        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(
+                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
+            )
         else:
-            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
+            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
 
         # pynq configured
         # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
@@ -700,39 +788,38 @@ class SingleShotProgram_e(AveragerProgramV2):
         )
 
         self.add_gauss(
-            ch=qb_ch,
+            ch=qubit_ch,
             name="ramp",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
             even_length=True,
         )
-        if cfg["pulse_type"] == "arb":
+
+        if cfg["qubit_ge_pulse_style"] == "arb":
             self.add_pulse(
-                ch=qb_ch,
-                name="qb_pulse",
-                ro_ch=ro_ch,
+                ch=qubit_ch,
+                name="qubit_pulse",
                 style="arb",
                 envelope="ramp",
-                freq=cfg["qb_freq_ge"],
-                phase=cfg["qb_phase"],
-                gain=cfg["pi_gain_ge"],
+                freq=cfg["qubit_freq_ge"],
+                phase=cfg["qubit_phase"],
+                gain=cfg["qubit_pi_gain_ge"],
             )
-        elif cfg["pulse_type"] == "flat_top":
+        elif cfg["qubit_ge_pulse_style"] == "flat_top":
             self.add_pulse(
-                ch=qb_ch,
-                name="qb_pulse",
-                ro_ch=ro_ch,
+                ch=qubit_ch,
+                name="qubit_pulse",
                 style="flat_top",
                 envelope="ramp",
-                freq=cfg["qb_freq_ge"],
-                phase=cfg["qb_phase"],
-                gain=cfg["pi_gain_ge"],
-                length=cfg["qb_flat_top_length_ge"],
+                freq=cfg["qubit_freq_ge"],
+                phase=cfg["qubit_phase"],
+                gain=cfg["qubit_pi_gain_ge"],
+                length=cfg["qubit_flat_top_length_ge"],
             )
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
-        self.pulse(ch=self.cfg["qb_ch"], name="qb_pulse", t=0)
+        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_pulse", t=0)
         self.delay_auto(0.01, tag="wait")
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
@@ -742,13 +829,15 @@ class SingleShotProgram_f(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qb_ch = cfg["qb_ch"]
+        qubit_ch = cfg["qubit_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qmixer_freq"])
+        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(
+                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
+            )
         else:
-            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
+            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
 
         # pynq configured
         # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
@@ -781,48 +870,46 @@ class SingleShotProgram_f(AveragerProgramV2):
         )
 
         self.add_gauss(
-            ch=qb_ch,
+            ch=qubit_ch,
             name="ramp_ge",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
             even_length=True,
         )
         self.add_pulse(
-            ch=qb_ch,
-            name="qb_ge_pulse",
-            ro_ch=ro_ch,
+            ch=qubit_ch,
+            name="qubit_ge_pulse",
             style="arb",
             envelope="ramp_ge",
-            freq=cfg["qb_freq_ge"],
-            phase=cfg["qb_phase"],
-            gain=cfg["pi_gain_ge"],
+            freq=cfg["qubit_freq_ge"],
+            phase=cfg["qubit_phase"],
+            gain=cfg["qubit_pi_gain_ge"],
         )
 
         self.add_gauss(
-            ch=qb_ch,
+            ch=qubit_ch,
             name="ramp_ef",
             sigma=cfg["sigma"],
             length=cfg["sigma_ef"] * 5,
             even_length=True,
         )
         self.add_pulse(
-            ch=qb_ch,
-            name="qb_ef_pulse",
-            ro_ch=ro_ch,
+            ch=qubit_ch,
+            name="qubit_ef_pulse",
             style="arb",
             envelope="ramp_ef",
-            freq=cfg["qb_freq_ef"],
-            phase=cfg["qb_phase"],
-            gain=cfg["pi_gain_ef"],
+            freq=cfg["qubit_freq_ef"],
+            phase=cfg["qubit_phase"],
+            gain=cfg["qubit_pi_gain_ef"],
         )
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
-        self.pulse(ch=self.cfg["qb_ch"], name="qb_ge_pulse", t=0)
+        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_ge_pulse", t=0)
         self.delay_auto(0.01, tag="wait1")
-        self.pulse(ch=self.cfg["qb_ch"], name="qb_ef_pulse", t=0)
+        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_ef_pulse", t=0)
         self.delay_auto(0.01)
-        self.pulse(ch=self.cfg["qb_ch"], name="qb_ge_pulse", t=0)
+        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_ge_pulse", t=0)
         self.delay_auto(0.01)
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
@@ -873,21 +960,79 @@ class SingleShot_gef:
         else:
             self.data = {"Ig": I_g, "Qg": Q_g, "Ie": I_e, "Qe": Q_e}
 
-    def plot(self, fid_avg=False, fit=False, normalize=False):
-        hist(
+    def plot(
+        self, fid_avg=False, fit=False, normalize=False, verbose=True, overlap=False
+    ):
+        return hist(
             self.data,
             amplitude_mode=False,
             ps_threshold=None,
             theta=None,
             plot=True,
-            verbose=True,
+            verbose=verbose,
+            gauss_overlap=overlap,
             fid_avg=fid_avg,
             fit=fit,
-            fitparams=[None, None, 20, None, None, 20],
+            fitparams=[None, None, 5, None, None, 5],
             normalize=normalize,
             title=None,
             export=False,
         )
+
+    def autorun(self, SHOTS, shot_f=False):
+        self.cfg["shots"] = SHOTS
+        shot_g = SingleShotProgram_g(
+            self.soccfg, reps=1, final_delay=self.cfg["relax_delay"], cfg=self.cfg
+        )
+        shot_e = SingleShotProgram_e(
+            self.soccfg, reps=1, final_delay=self.cfg["relax_delay"], cfg=self.cfg
+        )
+
+        iq_list_g = shot_g.acquire(self.soc, rounds=1, progress=False)
+        iq_list_e = shot_e.acquire(self.soc, rounds=1, progress=False)
+
+        I_g = iq_list_g[0][0].T[0]
+        Q_g = iq_list_g[0][0].T[1]
+        I_e = iq_list_e[0][0].T[0]
+        Q_e = iq_list_e[0][0].T[1]
+        if shot_f:
+            shot_f = SingleShotProgram_f(
+                self.soccfg,
+                reps=1,
+                final_delay=self.cfg["relax_delay"],
+                cfg=self.cfg,
+            )
+            iq_list_f = shot_f.acquire(self.soc, rounds=1, progress=True)
+            I_f = iq_list_f[0][0].T[0]
+            Q_f = iq_list_f[0][0].T[1]
+
+        if shot_f:
+            self.data = {
+                "Ig": I_g,
+                "Qg": Q_g,
+                "Ie": I_e,
+                "Qe": Q_e,
+                "If": I_f,
+                "Qf": Q_f,
+            }
+        else:
+            self.data = {"Ig": I_g, "Qg": Q_g, "Ie": I_e, "Qe": Q_e}
+
+        data = hist(
+            self.data,
+            amplitude_mode=False,
+            ps_threshold=None,
+            theta=None,
+            plot=False,
+            verbose=False,
+            fid_avg=False,
+            fit=False,
+            fitparams=[None, None, 20, None, None, 20],
+            normalize=False,
+            title=None,
+            export=False,
+        )
+        return data
 
     def saveLabber(self, qb_idx, yoko_value=None):
         expt_name = "s000_singleshot" + f"_{qb_idx}"

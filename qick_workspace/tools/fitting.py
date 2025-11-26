@@ -912,6 +912,7 @@ def fit_gauss(xdata, ydata, fitparams=None):
 # Double Gaussian Fit Functions
 # ====================================================== #
 
+
 def double_gaussian(x, a1, b1, c1, a2, b2, c2):
     """
     Standard double Gaussian function.
@@ -967,6 +968,7 @@ def fit_doublegauss(xdata, ydata, fitparams):
         pCov = np.zeros((6, 6))
 
     return pOpt, pCov
+
 
 # ====================================================== #
 # Hanger Resonator Fit Functions

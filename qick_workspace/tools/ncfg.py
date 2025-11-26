@@ -7,6 +7,7 @@ config_list = [
         "ch": {
             "res_ch": 0,
             "qb_ch": 7,
+            "qb_eh_ef": 2,
             "ro_ch": 0,
         },
         "res": {
@@ -29,6 +30,14 @@ config_list = [
             "pi_gain_ge": 0.1,
             "pi2_gain_ge": 0.1,
             "qb_flat_top_length_ge": 0.1,
+            "qb_freq_ef": 4000,
+            "qb_mixer_ef": 4000,
+            "qb_gain_ef": 0.1,
+            "qb_phase_ef": 0,
+            "sigma_ef": 0.05,
+            "pi_gain_ef": 0.1,
+            "pi2_gain_ef": 0.1,
+            "qb_flat_top_length_ef": 0.1,
             "ramsey_freq": 2,
             "nqz_qb": 1,
         },

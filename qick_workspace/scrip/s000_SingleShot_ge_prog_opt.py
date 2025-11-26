@@ -1,27 +1,24 @@
-# ===================================================================
-# 1. Standard & Third-Party Scientific Libraries
-# ===================================================================
-import matplotlib.pyplot as plt
-import numpy as np
-from scipy.integrate import quad
-from tqdm.auto import tqdm
-
-
-# ===================================================================
-# 2. QICK Libraries
-# ===================================================================
+# ----- Qick package ----- #
+from tabnanny import verbose
 from qick import *
 from qick.pyro import make_proxy
-from qick.asm_v2 import AveragerProgramV2, QickSpan, QickSweep1D
+from qick.asm_v2 import AveragerProgramV2
+from qick.asm_v2 import QickSpan, QickSweep1D
 
-# ===================================================================
-# 3. User/Local Libraries
-# ===================================================================
+# ----- Library ----- #
+import matplotlib.pyplot as plt
+import numpy as np
+from tqdm.auto import tqdm
+
+# ----- User Library ----- #
 from ..tools.system_cfg import *
 from ..tools.system_cfg import DATA_PATH
 from ..tools.system_tool import get_next_filename_labber, hdf5_generator
-from ..tools.fitting import fit_doublegauss, double_gaussian
+from ..tools.yamltool import yml_comment
 
+# from .singleshotplot import hist
+from ..tools.fitting import fit_doublegauss, double_gaussian, fit_gauss, gaussian
+from scipy.integrate import quad
 
 ##################
 # plot hist
@@ -50,7 +47,11 @@ def plot_hist(
         color = next(color_cycle)
     hist_data, bin_edges = np.histogram(data, bins=bins, range=xlims)
     if normalize:
-        hist_data = hist_data / hist_data.sum()
+        # Avoid division by zero error
+        hist_sum = hist_data.sum()
+        if hist_sum > 0:
+            hist_data = hist_data / hist_sum
+
     for i in range(len(hist_data)):
         if i > 0:
             label = None
@@ -100,427 +101,429 @@ def general_hist(
     export=False,
     check_qnd=False,
 ):
-    """
-    span: histogram limit is the mean +/- span
-    theta given and returned in deg
-    assume iqshots = [(idata, qdata)]*len(check_states), idata=[... *num_shots]*num_qubits_sample
-    g_states are indices to the check_states to categorize as "g" (the rest are "e")
-    e_label: label to put on the cumulative counts for the "e" state, i.e. the state relative to which the angle/fidelity is calculated
-    check_qubit_label: label to indicate which qubit is being measured
-    fid_avg: determines the method of calculating the fidelity (whether to average the mis-categorized e/g or count the total number of miscategorized over total counts)
-    normalize: normalizes counts by total counts
-    """
     if numbins is None:
         numbins = 200
 
-    # total histograms for shots listed as g or e
-    Ig_tot = []
-    Qg_tot = []
-    Ie_tot = []
-    Qe_tot = []
+    # Detect states
+    has_f_state = len(iqshots) > 2
 
-    # the actual total histograms of everything
-    Ig_tot_tot = []
-    Qg_tot_tot = []
-    Ie_tot_tot = []
-    Qe_tot_tot = []
+    # --- 1. Data Aggregation ---
+    data_map = {"g": np.array([]), "e": np.array([]), "f": np.array([])}
+    I_tot_all = np.array([])
+    Q_tot_all = np.array([])
+
     for check_i, data_check in enumerate(iqshots):
         I, Q = data_check
-        Ig_tot_tot = np.concatenate((Ig_tot_tot, I))
-        Qg_tot_tot = np.concatenate((Qg_tot_tot, Q))
-        Ie_tot_tot = np.concatenate((Ig_tot_tot, I))
-        Qe_tot_tot = np.concatenate((Qg_tot_tot, Q))
-        if check_i in g_states:
-            Ig_tot = np.concatenate((Ig_tot, I))
-            Qg_tot = np.concatenate((Qg_tot, Q))
-        elif check_i in e_states:
-            Ie_tot = np.concatenate((Ig_tot, I))
-            Qe_tot = np.concatenate((Qg_tot, Q))
+        I_tot_all = np.concatenate((I_tot_all, I))
+        Q_tot_all = np.concatenate((Q_tot_all, Q))
 
+        if check_i in g_states:
+            cat = "g"
+        elif check_i in e_states:
+            cat = "e"
+        else:
+            cat = "f"
+
+        if data_map[cat].size == 0:
+            data_map[cat] = I + 1j * Q
+        else:
+            data_map[cat] = np.concatenate((data_map[cat], I + 1j * Q))
+
+    # --- 2. Rotation Calculation ---
     if not amplitude_mode:
-        """Compute the rotation angle"""
         if theta is None:
-            xg, yg = np.average(Ig_tot), np.average(Qg_tot)
-            xe, ye = np.average(Ie_tot), np.average(Qe_tot)
+            xg = np.mean(np.real(data_map["g"])) if data_map["g"].size > 0 else 0
+            yg = np.mean(np.imag(data_map["g"])) if data_map["g"].size > 0 else 0
+            xe = np.mean(np.real(data_map["e"])) if data_map["e"].size > 0 else 1
+            ye = np.mean(np.imag(data_map["e"])) if data_map["e"].size > 0 else 1
             theta = -np.arctan2((ye - yg), (xe - xg))
         else:
             theta *= np.pi / 180
-        Ig_tot_tot_new = Ig_tot_tot * np.cos(theta) - Qg_tot_tot * np.sin(theta)
-        Qg_tot_tot_new = Ig_tot_tot * np.sin(theta) + Qg_tot_tot * np.cos(theta)
-        Ie_tot_tot_new = Ie_tot_tot * np.cos(theta) - Qe_tot_tot * np.sin(theta)
-        Qe_tot_tot_new = Ie_tot_tot * np.sin(theta) + Qe_tot_tot * np.cos(theta)
-        I_tot_tot_new = np.concatenate((Ie_tot_tot_new, Ig_tot_tot_new))
-        span = (np.max(I_tot_tot_new) - np.min(I_tot_tot_new)) / 2
-        midpoint = (np.max(I_tot_tot_new) + np.min(I_tot_tot_new)) / 2
+
+        def rotate_iq(c_data, ang):
+            i_new = np.real(c_data) * np.cos(ang) - np.imag(c_data) * np.sin(ang)
+            q_new = np.real(c_data) * np.sin(ang) + np.imag(c_data) * np.cos(ang)
+            return i_new, q_new
+
+        I_all_new, _ = rotate_iq(I_tot_all + 1j * Q_tot_all, theta)
+        span = (np.max(I_all_new) - np.min(I_all_new)) / 2
+        midpoint = (np.max(I_all_new) + np.min(I_all_new)) / 2
     else:
         theta = 0
-        amp_g_tot_tot = np.abs(Ig_tot_tot + 1j * Qg_tot_tot)
-        amp_e_tot_tot = np.abs(Ie_tot_tot + 1j * Qe_tot_tot)
-        amp_tot_tot = np.concatenate((amp_g_tot_tot, amp_e_tot_tot))
-        span = (np.max(amp_tot_tot) - np.min(amp_tot_tot)) / 2
-        midpoint = (np.max(amp_tot_tot) + np.min(amp_tot_tot)) / 2
+        amp_all = np.abs(I_tot_all + 1j * Q_tot_all)
+        span = (np.max(amp_all) - np.min(amp_all)) / 2
+        midpoint = (np.max(amp_all) + np.min(amp_all)) / 2
+
     xlims = [midpoint - span, midpoint + span]
 
+    # --- 3. Plot Setup ---
     if plot:
-        fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(9, 6))
+        fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(9, 7))
         if title is None:
             title = f"Readout Fidelity" + (
                 f" on Q{check_qubit_label}" if check_qubit_label is not None else ""
             )
         fig.suptitle(title)
         fig.tight_layout()
+
+        # Row 0: IQ Scatter
         axs[0, 0].set_ylabel("Q [ADC levels]", fontsize=11)
         axs[0, 0].set_title("Unrotated", fontsize=13)
-        axs[0, 0].axis("equal")
-        axs[0, 0].tick_params(axis="both", which="major", labelsize=10)
         axs[0, 0].set_xlabel("I [ADC levels]", fontsize=11)
+        axs[0, 0].axis("equal")
 
-        axs[0, 1].axis("equal")
-        axs[0, 1].tick_params(axis="both", which="major", labelsize=10)
+        axs[0, 1].set_title(
+            f"Rotated ($\\theta={theta * 180 / np.pi:.1f}^\\circ$)", fontsize=13
+        )
         axs[0, 1].set_xlabel("I [ADC levels]", fontsize=11)
+        axs[0, 1].axis("equal")
 
+        # Row 1: Histogram & Confusion Matrix
         threshold_axis = "I" if not amplitude_mode else "Amplitude"
         axs[1, 0].set_ylabel("Counts", fontsize=12)
         axs[1, 0].set_xlabel(f"{threshold_axis} [ADC levels]", fontsize=11)
-        axs[1, 0].tick_params(axis="both", which="major", labelsize=10)
 
-        axs[1, 1].set_title("Cumulative Counts", fontsize=13)
-        axs[1, 1].set_xlabel(f"{threshold_axis} [ADC levels]", fontsize=11)
-        axs[1, 1].tick_params(axis="both", which="major", labelsize=10)
         plt.subplots_adjust(hspace=0.35, wspace=0.15)
 
-    y_max = 0
-    n_tot_g = [0] * numbins
-    n_tot_e = [0] * numbins
+    # Variables
+    n_dist = {"g": None, "e": None, "f": None}
+    bins_dist = None
+    gauss_fit_fidelity = 0
+    popts = []
+    pcovs = []
 
-    # FIX: Create a flag to ensure fitting runs if either fit=True OR overlap=True
-    do_fit = fit or gauss_overlap
-
-    if do_fit:
-        popts = [None] * len(state_labels)
-        pcovs = [None] * len(state_labels)
-
-    """
-    Loop over check states
-    """
-    y_max = 0
+    # --- 4. Process Each Input State ---
     for check_i, data_check in enumerate(iqshots):
         state_label = state_labels[check_i]
-
         I, Q = data_check
-        amp = np.abs(I + 1j * Q)
+        complex_data = I + 1j * Q
 
-        xavg, yavg, amp_avg = np.average(I), np.average(Q), np.average(amp)
+        # Apply styles based on cycle
+        this_color = default_colors[check_i % len(default_colors)]
+        this_marker = marker_cycle[check_i % len(marker_cycle)]
+        this_linestyle = linestyle_cycle[0]
 
-        """Rotate the IQ data"""
-        I_new = I * np.cos(theta) - Q * np.sin(theta)
-        Q_new = I * np.sin(theta) + Q * np.cos(theta)
+        # Rotation
+        if not amplitude_mode:
+            I_new, Q_new = rotate_iq(complex_data, theta)
+            data_to_hist = I_new
+        else:
+            I_new, Q_new = I, Q
+            data_to_hist = np.abs(complex_data)
 
-        """New means of each blob"""
-        xavg_new, yavg_new = np.average(I_new), np.average(Q_new)
-
-        if verbose:
-            print(state_label, "unrotated averages:")
-            if not amplitude_mode:
-                print(
-                    f"I {xavg:.3f} +/- {np.std(I):.3f} \t Q {yavg:.3f} +/- {np.std(Q):.3f} \t Amp {amp_avg:.3f} +/- {np.std(amp):.3f}"
-                )
-                print(
-                    f"Rotated (theta={theta:.3f}):"
-                )  # Assuming theta also needs limiting
-                print(
-                    f"I {xavg_new:.3f} +/- {np.std(I_new):.3f} \t Q {yavg_new:.3f} +/- {np.std(Q_new):.3f} \t Amp {np.abs(xavg_new + 1j * yavg_new):.3f} +/- {np.std(amp):.3f}"
-                )
-            else:
-                print(f"Amps {amp_avg:.3f} +/- {np.std(amp):.3f}")
-
+        # Scatter Plot
         if plot:
+            # Scatter points
             axs[0, 0].scatter(
                 I,
                 Q,
                 label=state_label,
-                color=default_colors[check_i % len(default_colors)],
+                color=this_color,
                 marker=".",
                 edgecolor="None",
-                alpha=0.3,
+                alpha=0.1,
             )
+            # Mean marker
             axs[0, 0].plot(
-                [xavg],
-                [yavg],
+                [np.mean(I)],
+                [np.mean(Q)],
                 color="k",
-                linestyle=":",
-                marker="o",
-                markerfacecolor=default_colors[check_i % len(default_colors)],
-                markersize=5,
+                marker=this_marker,
+                markerfacecolor=this_color,
+                markersize=6,
             )
 
+            # Rotated Scatter
             axs[0, 1].scatter(
                 I_new,
                 Q_new,
                 label=state_label,
-                color=default_colors[check_i % len(default_colors)],
+                color=this_color,
                 marker=".",
                 edgecolor="None",
-                alpha=0.3,
+                alpha=0.1,
             )
             axs[0, 1].plot(
-                [xavg_new],
-                [yavg_new],
+                [np.mean(I_new)],
+                [np.mean(Q_new)],
                 color="k",
-                linestyle=":",
-                marker="o",
-                markerfacecolor=default_colors[check_i % len(default_colors)],
-                markersize=5,
+                marker=this_marker,
+                markerfacecolor=this_color,
+                markersize=6,
             )
 
-            if check_i in g_states or check_i in e_states:
-                linestyle = linestyle_cycle[0]
-            else:
-                linestyle = linestyle_cycle[1]
-
-            # n, bins, p = axs[1,0].hist(I_new, bins=numbins, range=xlims, color=default_colors[check_i % len(default_colors)], label=label, histtype='step', linestyle=linestyle)
+        # Histogram Accumulation
+        if plot:
             n, bins = plot_hist(
-                I_new if not amplitude_mode else amp,
+                data_to_hist,
                 bins=numbins,
                 ax=axs[1, 0],
                 xlims=xlims,
-                color=default_colors[check_i % len(default_colors)],
+                color=this_color,
+                linestyle=this_linestyle,
                 label=state_label,
-                linestyle=linestyle,
-                normalize=normalize,
+                alpha=0.6,
+                normalize=False,
             )
-            y_max = max(y_max, max(n))
-            axs[1, 0].set_ylim((0, y_max * 1.1))
-            # n, bins = np.histogram(I_new, bins=numbins, range=xlims)
-            # axs[1,0].plot(bins[:-1], n/n.sum(), color=default_colors[check_i % len(default_colors)], linestyle=linestyle)
+        else:
+            n, bins = np.histogram(data_to_hist, bins=numbins, range=xlims)
 
-            axs[1, 1].plot(
-                bins[:-1],
-                np.cumsum(n) / n.sum(),
-                color=default_colors[check_i % len(default_colors)],
-                linestyle=linestyle,
-            )
+        bins_dist = bins
 
-        else:  # just getting the n, bins for data processing
-            n, bins = np.histogram(
-                I_new if not amplitude_mode else amp, bins=numbins, range=xlims
-            )
-
+        # Accumulate for processing
         if check_i in g_states:
-            n_tot_g += n
-            bins_g = bins
+            cat = "g"
         elif check_i in e_states:
-            n_tot_e += n
-            bins_e = bins
+            cat = "e"
+        else:
+            cat = "f"
 
-        if check_qnd:
-            if state_label == "g_0":
-                n_g_0 = n
-            if state_label == "g_1":
-                n_g_1 = n
+        if n_dist[cat] is None:
+            n_dist[cat] = n
+        else:
+            n_dist[cat] += n
 
-    if check_qnd:
-        n_diff = np.abs((n_g_0 - n_g_1))
-        n_diff_qnd = np.sum(n_diff) / 2 / np.sum(n_g_0)
+    # --- 5. Fitting (Modified) ---
+    # Perform fit if 'fit' is True OR if 'gauss_overlap' is True (requires fit)
+    do_fit = fit or gauss_overlap
 
-    # FIX: Use do_fit flag here
-    if do_fit:
-            # 1. Determine Global Anchors
-            # Use the total accumulated histograms (n_tot_g, n_tot_e) to find the
-            # robust locations of the Ground (g) and Excited (e) states.
-            # This prevents the fitter from getting lost on individual shots with low populations.
-            xmax_g = bins_g[np.argmax(n_tot_g)]
-            xmax_e = bins_e[np.argmax(n_tot_e)]
-            
-            # 2. Estimate Sigma Dynamically
-            # Calculate the distance between G and E. A good rule of thumb is that 
-            # the peaks are separated by roughly 4 to 6 sigmas.
-            dist_ge = abs(xmax_e - xmax_g)
-            if dist_ge > 0:
-                sigma_guess = dist_ge / 6.0
-            else:
-                # Fallback: use a fraction of the total span
-                sigma_guess = (bins[-1] - bins[0]) / 20.0
+    if do_fit and n_dist["g"] is not None and n_dist["e"] is not None:
+        bin_centers = (bins_dist[:-1] + bins_dist[1:]) / 2
+        n_g = n_dist["g"]
+        n_e = n_dist["e"]
 
-            # Safety check to prevent division by zero
-            if sigma_guess < 1e-3: sigma_guess = 1.0
+        # Anchors
+        xmax_g_idx = np.argmax(n_g)
+        xmax_e_idx = np.argmax(n_e)
+        xmax_g_val = bin_centers[xmax_g_idx]
+        xmax_e_val = bin_centers[xmax_e_idx]
 
-            for check_i, data_check in enumerate(iqshots):
-                state_label = state_labels[check_i]
-                I, Q = data_check
-                
-                # --- Data Rotation & Preparation ---
-                I_new = I * np.cos(theta) - Q * np.sin(theta)
-                Q_new = I * np.sin(theta) + Q * np.cos(theta)
-                amp = np.abs(I_new + 1j * Q_new)
+        sigma_guess = abs(xmax_e_val - xmax_g_val) / 5.0
+        if sigma_guess < 1e-3:
+            sigma_guess = (bins_dist[-1] - bins_dist[0]) / 20.0
 
-                target_data = amp if amplitude_mode else I_new
-                n, bins = np.histogram(target_data, bins=numbins, range=xlims)
-                
-                # Use Bin Centers (more accurate than edges for curve fitting)
-                bin_centers = (bins[:-1] + bins[1:]) / 2
+        # Logic: If overlap is True -> Double Gaussian. Else -> Single Gaussian.
+        if gauss_overlap:
+            # --- DOUBLE GAUSSIAN FIT ---
+            fit_func = double_gaussian
 
-                # --- Smart Initial Guesses ---
-                # Instead of searching for peaks in this specific trace (which might lack one state),
-                # we look up the amplitude at the *known* global G and E positions.
-                
-                # Find indices in current bins closest to global xmax_g/e
-                idx_g = np.argmin(np.abs(bin_centers - xmax_g))
-                idx_e = np.argmin(np.abs(bin_centers - xmax_e))
-                
-                # Read height at those positions
-                ymax_g_guess = n[idx_g]
-                ymax_e_guess = n[idx_e]
+            guess_g = [
+                np.max(n_g),
+                xmax_g_val,
+                sigma_guess,
+                np.max(n_g) * 0.1,
+                xmax_e_val,
+                sigma_guess,
+            ]
+            guess_e = [
+                np.max(n_e),
+                xmax_e_val,
+                sigma_guess,
+                np.max(n_e) * 0.2,
+                xmax_g_val,
+                sigma_guess,
+            ]
 
-                # Ensure guess is non-zero for log-likelihood stability
-                if ymax_g_guess < 1: ymax_g_guess = 1
-                if ymax_e_guess < 1: ymax_e_guess = 1
+            popt_g, pcov_g = fit_doublegauss(bin_centers, n_g, guess_g)
+            popt_e, pcov_e = fit_doublegauss(bin_centers, n_e, guess_e)
 
-                # Construct parameters: [Amp_g, Mean_g, Sigma_g, Amp_e, Mean_e, Sigma_e]
-                # Note: We use the GLOBAL xmax_g/e as the mean guess.
-                fitparams = [
-                    ymax_g_guess, xmax_g, sigma_guess, 
-                    ymax_e_guess, xmax_e, sigma_guess
-                ]
+            # Calc Overlap for Double Gaussian
+            def make_norm_pdf(popt):
+                area = (popt[0] * abs(popt[2]) + popt[3] * abs(popt[5])) * np.sqrt(
+                    2 * np.pi
+                )
+                return lambda x: double_gaussian(x, *popt) / area
 
-                # Perform the Fit
-                popt, pcov = fit_doublegauss(xdata=bin_centers, ydata=n, fitparams=fitparams)
+            pdf_g = make_norm_pdf(popt_g)
+            pdf_e = make_norm_pdf(popt_e)
 
-                if plot:
-                    # Generate the fitted curve
-                    y_fit = double_gaussian(bin_centers, *popt)
-                    
-                    # Normalize the curve for plotting if necessary
-                    # (Adjust this based on whether your 'plot_hist' function normalizes the data)
-                    if normalize:
-                        y_fit_norm = y_fit / y_fit.sum()
-                    else:
-                        y_fit_norm = y_fit
+            def overlap_func(x):
+                return np.minimum(pdf_g(x), pdf_e(x))
 
-                    # Plot the fitted curve
-                    axs[1, 0].plot(
-                        bin_centers,
-                        y_fit_norm,
-                        "-",
-                        linewidth=2.0,
-                        color=default_colors[check_i % len(default_colors)],
-                        alpha=0.8,
-                        label=f"{state_label} fit"
-                    )
+            mu_min = min(xmax_g_val, xmax_e_val)
+            mu_max = max(xmax_g_val, xmax_e_val)
+            overlap_area, _ = quad(
+                overlap_func, mu_min - 10 * sigma_guess, mu_max + 10 * sigma_guess
+            )
+            gauss_fit_fidelity = 1 - overlap_area
 
-                    # --- Calculate Gaussian Overlap Fidelity ---
-                    _, b1, c1, _, b2, c2 = popt
-                    
-                    # Helper to calc PDF
-                    def gaussian_pdf(x, mean, sigma):
-                        return (1 / (sigma * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mean) / sigma) ** 2)
+        else:
+            # --- SINGLE GAUSSIAN FIT ---
+            fit_func = gaussian
 
-                    # Helper to find intersection
-                    def overlap_integrand(x):
-                        return np.minimum(gaussian_pdf(x, b1, c1), gaussian_pdf(x, b2, c2))
-                    
-                    # Integrate over a relevant range (5 sigmas)
-                    int_min = min(b1 - 5*c1, b2 - 5*c2)
-                    int_max = max(b1 + 5*c1, b2 + 5*c2)
-                    
-                    area, _ = quad(overlap_integrand, int_min, int_max)
-                    gauss_fit_fidelity = 1 - area
+            # Guess structure: [amp, mu, sigma, offset]
+            guess_g = [np.max(n_g), xmax_g_val, sigma_guess, 0]
+            guess_e = [np.max(n_e), xmax_e_val, sigma_guess, 0]
 
-                popts[check_i] = popt
-                pcovs[check_i] = pcov
+            popt_g, pcov_g = fit_gauss(bin_centers, n_g, guess_g)
+            popt_e, pcov_e = fit_gauss(bin_centers, n_e, guess_e)
+
+        popts = [popt_g, popt_e]
+        pcovs = [pcov_g, pcov_e]
 
         if plot:
-            y = double_gaussian(bins[:-1], *popt)
-            y_norm = y / y.sum()
+            x_dense = np.linspace(bins_dist[0], bins_dist[-1], 500)
+            y_fit_g = fit_func(x_dense, *popt_g)
+            y_fit_e = fit_func(x_dense, *popt_e)
 
+            # Use Cycle colors for G and E fit lines (typically index 0 and 1)
             axs[1, 0].plot(
-                bins[:-1],
-                y_norm,
-                "-",
-                color=default_colors[check_i % len(default_colors)],
+                x_dense,
+                y_fit_g,
+                color=default_colors[0],
+                linestyle="-",
+                linewidth=2,
+                label="Fit G",
+            )
+            axs[1, 0].plot(
+                x_dense,
+                y_fit_e,
+                color=default_colors[1],
+                linestyle="-",
+                linewidth=2,
+                label="Fit E",
             )
 
-            def gaussian_norm(x, b, c):
-                a = 1 / (np.sqrt(2 * np.pi) * c)
-                return a * np.exp(-((x - b) ** 2) / (2 * c**2))
+            # Viz overlap only if we did double gaussian analysis
+            if gauss_overlap:
+                total_counts_g = np.sum(n_g)
+                bin_width = bins_dist[1] - bins_dist[0]
+                scale_factor = total_counts_g * bin_width
+                y_overlap_viz = overlap_func(x_dense) * scale_factor
+                axs[1, 0].fill_between(
+                    x_dense,
+                    0,
+                    y_overlap_viz,
+                    color="purple",
+                    alpha=0.3,
+                    label="Overlap Error",
+                    zorder=0,
+                )
 
-            def overlap_area_norm(b1, c1, b2, c2):
-                def min_func(x):
-                    return np.minimum(
-                        gaussian_norm(x, b1, c1), gaussian_norm(x, b2, c2)
-                    )
-
-                x_min = min(b1 - 5 * c1, b2 - 5 * c2)
-                x_max = max(b1 + 5 * c1, b2 + 5 * c2)
-                area, _ = quad(min_func, x_min, x_max)
-                return area
-
-            def readout_fidelity_norm(b1, c1, b2, c2):
-                overlap = overlap_area_norm(b1, c1, b2, c2)
-                return 1 - overlap
-
-            _, b1, c1, _, b2, c2 = popt
-            gauss_fit_fidelity = readout_fidelity_norm(b1, c1, b2, c2)
-
-        popts[check_i] = popt
-        pcovs[check_i] = pcov
-
-    """Compute the fidelity using overlap of the histograms"""
+    # --- 6. Thresholds & Confusion Matrix ---
     fids = []
     thresholds = []
-    # this method calculates fidelity as 1-2(Neg + Nge)/N
-    contrast = np.abs(
-        (
-            (np.cumsum(n_tot_g) - np.cumsum(n_tot_e))
-            / (0.5 * n_tot_g.sum() + 0.5 * n_tot_e.sum())
-        )
+
+    contrast_ge = np.abs(
+        (np.cumsum(n_dist["g"]) - np.cumsum(n_dist["e"]))
+        / (np.sum(n_dist["g"]) + np.sum(n_dist["e"]))
     )
-    tind = contrast.argmax()
-    thresholds.append(bins[tind])
-    # thresholds.append(np.average([bins_e[idx_e], bins_g[idx_g]]))
+    tind_ge = contrast_ge.argmax()
+    threshold_ge = bins_dist[tind_ge]
+    thresholds.append(threshold_ge)
+
     if not fid_avg:
-        fids.append(contrast[tind])
+        fids.append(contrast_ge[tind_ge])
     else:
-        # this method calculates fidelity as
-        # (Ngg+Nee)/N = Ngg/N + Nee/N=(0.5N-Nge)/N + (0.5N-Neg)/N = 1-(Nge+Neg)/N
         fids.append(
             0.5
             * (
                 1
-                - n_tot_g[tind:].sum() / n_tot_g.sum()
+                - n_dist["g"][tind_ge:].sum() / n_dist["g"].sum()
                 + 1
-                - n_tot_e[:tind].sum() / n_tot_e.sum()
+                - n_dist["e"][:tind_ge].sum() / n_dist["e"].sum()
             )
         )
 
-    if plot:
-        axs[0, 1].set_title(
-            f"Rotated ($\\theta={theta * 180 / np.pi:.5}^\\circ$)", fontsize=13
-        )
+    # --- Matrix Calculation ---
+    if not has_f_state:
+        # 2x2
+        matrix_size = 2
+        labels = ["|g>", f"|{e_label}>"]
 
-        axs[1, 0].axvline(thresholds[0], color="0.2", linestyle="--")
-        title = (
-            "$\overline{F}_{g" + e_label + "}$" if fid_avg else "$F_{g" + e_label + "}$"
-        )
-        if gauss_overlap:
-            # gauss_fit_fidelity is now guaranteed to be defined because do_fit ensured the block ran
-            axs[1, 0].set_title(f"{title}: {100 * gauss_fit_fidelity:.3}%", fontsize=13)
+        n00 = n_dist["g"][:tind_ge].sum()
+        n01 = n_dist["g"][tind_ge:].sum()
+        n10 = n_dist["e"][:tind_ge].sum()
+        n11 = n_dist["e"][tind_ge:].sum()
+
+        raw_matrix = np.array([[n00, n01], [n10, n11]])
+    else:
+        # 3x3
+        matrix_size = 3
+        labels = ["|g>", f"|{e_label}>", "|f>"]
+
+        if n_dist["f"] is not None:
+            contrast_ef = np.abs(
+                (np.cumsum(n_dist["e"]) - np.cumsum(n_dist["f"]))
+                / (np.sum(n_dist["e"]) + np.sum(n_dist["f"]))
+            )
+            tind_ef = contrast_ef.argmax()
+            threshold_ef = bins_dist[tind_ef]
+            thresholds.append(threshold_ef)
+
+            sorted_t_indices = sorted([tind_ge, tind_ef])
+            t1, t2 = sorted_t_indices[0], sorted_t_indices[1]
+
+            def classify_counts(n_arr):
+                c0 = n_arr[:t1].sum()
+                c1 = n_arr[t1:t2].sum()
+                c2 = n_arr[t2:].sum()
+                return [c0, c1, c2]
+
+            row_g = classify_counts(n_dist["g"])
+            row_e = classify_counts(n_dist["e"])
+            row_f = classify_counts(n_dist["f"])
+
+            raw_matrix = np.array([row_g, row_e, row_f])
         else:
-            axs[1, 0].set_title(f"{title}: {100 * fids[0]:.3}%", fontsize=13)
+            raw_matrix = np.zeros((3, 3))
+
+    row_sums = raw_matrix.sum(axis=1)[:, np.newaxis]
+    row_sums[row_sums == 0] = 1
+    conf_matrix = 100 * raw_matrix / row_sums
+
+    # --- 7. Finalize Plots ---
+    if plot:
+        for th in thresholds:
+            axs[1, 0].axvline(th, color="k", linestyle="--", label="Threshold")
+
+        fid_title = "$\overline{F}_{ge}$" if fid_avg else "$F_{ge}$"
+        if gauss_overlap:
+            axs[1, 0].set_title(
+                f"{fid_title} (Gauss): {100 * gauss_fit_fidelity:.2f}%", fontsize=13
+            )
+        else:
+            axs[1, 0].set_title(
+                f"{fid_title} (Thresh): {100 * fids[0]:.2f}%", fontsize=13
+            )
+
         if ps_threshold is not None:
-            axs[1, 0].axvline(ps_threshold, color="0.2", linestyle="-.")
+            axs[1, 0].axvline(ps_threshold, color="gray", linestyle="-.")
 
-        axs[1, 1].plot(bins[:-1], np.cumsum(n_tot_g) / n_tot_g.sum(), "b", label="g")
-        axs[1, 1].plot(
-            bins[:-1], np.cumsum(n_tot_e) / n_tot_e.sum(), "r", label=e_label
-        )
-        axs[1, 1].axvline(thresholds[0], color="0.2", linestyle="--")
+        # Re-enable legends
+        axs[1, 0].legend(fontsize=8, loc="upper right")
+        axs[0, 0].legend(fontsize=8)
+        axs[0, 1].legend(fontsize=8)
 
-        prop = {"size": 8}
-        axs[0, 0].legend(prop=prop)
-        axs[0, 1].legend(prop=prop)
-        axs[1, 0].legend(prop=prop)
-        axs[1, 1].legend(prop=prop)
+        # --- Draw Confusion Matrix ---
+        ax_cm = axs[1, 1]
+        ax_cm.clear()
+        im = ax_cm.imshow(conf_matrix, cmap="Reds", vmin=0, vmax=100)
+
+        ax_cm.set_xticks(np.arange(matrix_size))
+        ax_cm.set_yticks(np.arange(matrix_size))
+        ax_cm.set_xticklabels([str(i) for i in range(matrix_size)])
+        ax_cm.set_yticklabels(labels)
+        ax_cm.set_xlabel("Declared output", fontsize=11)
+        ax_cm.set_ylabel("Input state", fontsize=11)
+        ax_cm.tick_params(top=False, bottom=True, labeltop=False, labelbottom=True)
+
+        for i in range(matrix_size):
+            for j in range(matrix_size):
+                val = conf_matrix[i, j]
+                text_color = "white" if val > 50 else "black"
+                ax_cm.text(
+                    j,
+                    i,
+                    f"{val:.1f}",
+                    ha="center",
+                    va="center",
+                    color=text_color,
+                    fontsize=12,
+                )
+
+        if title is not None:
+            ax_cm.set_title("Readout Fidelity Matrix (%)")
 
         if export:
             plt.savefig("multihist.jpg", dpi=1000)
@@ -529,34 +532,29 @@ def general_hist(
         else:
             plt.show()
 
-    # fids: ge, gf, ef
+    # --- 8. Returns ---
     if gauss_overlap:
         return_data = [gauss_fit_fidelity, thresholds, theta * 180 / np.pi]
     else:
         return_data = [fids, thresholds, theta * 180 / np.pi]
-    if fit:
+
+    if fit or gauss_overlap:
         return_data += [popts, pcovs]
+
     if check_qnd:
-        return_data += [n_diff_qnd]
-    if verbose:
-        print(
-            f"fidelity:{fids} \nthressholds:{thresholds} \ntheta:{theta * 180 / np.pi}"
+        n_diff = np.abs((n_g_0 - n_g_1)) if "n_g_0" in locals() else 0
+        n_diff_qnd = (
+            np.sum(n_diff) / 2 / np.sum(n_dist["g"]) if np.sum(n_dist["g"]) > 0 else 0
         )
-        gg = 100 * (1 - n_tot_g[tind:].sum() / n_tot_g.sum())
-        ge = 100 * (n_tot_g[tind:].sum() / n_tot_g.sum())
-        eg = 100 * (1 - n_tot_e[tind:].sum() / n_tot_e.sum())
-        ee = 100 * (n_tot_e[tind:].sum() / n_tot_e.sum())
-        print(f"""
-            Fidelity Matrix:
-            -----------------
-            | {gg:.3f}% | {ge:.3f}% |
-            ----------------
-            | {eg:.3f}% | {ee:.3f}% |
-            -----------------
-            IQ plane rotated by: {180 / np.pi * theta:.1f}{chr(176)}
-            Threshold: {thresholds[0]:.3e}
-            Fidelity: {100 * fids[0]:.3f}%
-            """)
+        return_data += [n_diff_qnd]
+
+    if verbose:
+        print(f"Theta: {theta * 180 / np.pi:.2f} deg")
+        print(f"Threshold Fidelity: {100 * fids[0]:.3f}%")
+        print("Fidelity Matrix (%):\n", conf_matrix)
+        if gauss_overlap:
+            print(f"Gaussian Fit Fidelity: {100 * gauss_fit_fidelity:.3f}%")
+
     return return_data
 
 
@@ -688,7 +686,6 @@ def multihist(
     return return_data
 
 
-
 ##################
 # Define Program #
 ##################
@@ -700,16 +697,18 @@ class SingleShotProgram_g(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
         else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
 
+        # pynq configured
+        # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
+
+        # tproc configured
         self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
         self.add_readoutconfig(
             ch=ro_ch, name="myro", freq=cfg["res_freq_ge"], gen_ch=res_ch
@@ -747,16 +746,18 @@ class SingleShotProgram_e(AveragerProgramV2):
     def _initialize(self, cfg):
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
-        qubit_ch = cfg["qubit_ch"]
+        qb_ch = cfg["qb_ch"]
 
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
-        if self.soccfg["gens"][qubit_ch]["type"] == "axis_sg_int4_v2":
-            self.declare_gen(
-                ch=qubit_ch, nqz=cfg["nqz_qubit"], mixer_freq=cfg["qmixer_freq"]
-            )
-        else:
-            self.declare_gen(ch=qubit_ch, nqz=cfg["nqz_qubit"])
 
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
+        else:
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
+        # pynq configured
+        # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
+
+        # tproc configured
         self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
         self.add_readoutconfig(
             ch=ro_ch, name="myro", freq=cfg["res_freq_ge"], gen_ch=res_ch
@@ -784,40 +785,128 @@ class SingleShotProgram_e(AveragerProgramV2):
         )
 
         self.add_gauss(
-            ch=qubit_ch,
+            ch=qb_ch,
             name="ramp",
             sigma=cfg["sigma"],
             length=cfg["sigma"] * 5,
             even_length=True,
         )
-        if cfg["qubit_ge_pulse_style"] == "arb":
+        if cfg["pulse_type"] == "arb":
             self.add_pulse(
-                ch=qubit_ch,
-                name="qubit_pulse",
+                ch=qb_ch,
+                name="qb_pulse",
                 ro_ch=ro_ch,
                 style="arb",
                 envelope="ramp",
-                freq=cfg["qubit_freq_ge"],
-                phase=cfg["qubit_phase"],
-                gain=cfg["qubit_pi_gain_ge"],
+                freq=cfg["qb_freq_ge"],
+                phase=cfg["qb_phase"],
+                gain=cfg["pi_gain_ge"],
             )
-        elif cfg["qubit_ge_pulse_style"] == "flat_top":
+        elif cfg["pulse_type"] == "flat_top":
             self.add_pulse(
-                ch=qubit_ch,
-                name="qubit_pulse",
+                ch=qb_ch,
+                name="qb_pulse",
                 ro_ch=ro_ch,
                 style="flat_top",
                 envelope="ramp",
-                freq=cfg["qubit_freq_ge"],
-                phase=cfg["qubit_phase"],
-                gain=cfg["qubit_pi_gain_ge"],
-                length=cfg["qubit_flat_top_length_ge"],
+                freq=cfg["qb_freq_ge"],
+                phase=cfg["qb_phase"],
+                gain=cfg["pi_gain_ge"],
+                length=cfg["qb_flat_top_length_ge"],
             )
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
-        self.pulse(ch=self.cfg["qubit_ch"], name="qubit_pulse", t=0)
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_pulse", t=0)
         self.delay_auto(0.01, tag="wait")
+        self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
+        self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
+
+
+class SingleShotProgram_f(AveragerProgramV2):
+    def _initialize(self, cfg):
+        ro_ch = cfg["ro_ch"]
+        res_ch = cfg["res_ch"]
+        qb_ch = cfg["qb_ch"]
+
+        self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
+        if self.soccfg["gens"][qb_ch]["type"] == "axis_sg_int4_v2":
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"], mixer_freq=cfg["qb_mixer"])
+        else:
+            self.declare_gen(ch=qb_ch, nqz=cfg["nqz_qb"])
+
+        # pynq configured
+        # self.declare_readout(ch=ro_ch, length=cfg['ro_len'], freq=cfg['f_res'], gen_ch=res_ch)
+
+        # tproc configured
+        self.declare_readout(ch=ro_ch, length=cfg["ro_length"])
+        self.add_readoutconfig(
+            ch=ro_ch, name="myro", freq=cfg["res_freq_ge"], gen_ch=res_ch
+        )
+
+        self.add_loop("shotloop", cfg["shots"])
+
+        self.add_gauss(
+            ch=res_ch,
+            name="readout",
+            sigma=cfg["res_sigma"],
+            length=5 * cfg["res_sigma"],
+            even_length=True,
+        )
+        self.add_pulse(
+            ch=res_ch,
+            name="res_pulse",
+            ro_ch=ro_ch,
+            style="flat_top",
+            envelope="readout",
+            length=cfg["res_length"],
+            freq=cfg["res_freq_ge"],
+            phase=cfg["res_phase"],
+            gain=cfg["res_gain_ge"],
+        )
+
+        self.add_gauss(
+            ch=qb_ch,
+            name="ramp_ge",
+            sigma=cfg["sigma"],
+            length=cfg["sigma"] * 5,
+            even_length=True,
+        )
+        self.add_pulse(
+            ch=qb_ch,
+            name="qb_ge_pulse",
+            style="arb",
+            envelope="ramp_ge",
+            freq=cfg["qb_freq_ge"],
+            phase=cfg["qb_phase"],
+            gain=cfg["pi_gain_ge"],
+        )
+
+        self.add_gauss(
+            ch=qb_ch,
+            name="ramp_ef",
+            sigma=cfg["sigma"],
+            length=cfg["sigma_ef"] * 5,
+            even_length=True,
+        )
+        self.add_pulse(
+            ch=qb_ch,
+            name="qb_ef_pulse",
+            style="arb",
+            envelope="ramp_ef",
+            freq=cfg["qb_freq_ef"],
+            phase=cfg["qb_phase"],
+            gain=cfg["pi_gain_ef"],
+        )
+
+    def _body(self, cfg):
+        self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_ge_pulse", t=0)
+        self.delay_auto(0.01, tag="wait1")
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_ef_pulse", t=0)
+        self.delay_auto(0.01)
+        self.pulse(ch=self.cfg["qb_ch"], name="qb_ge_pulse", t=0)
+        self.delay_auto(0.01)
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
 

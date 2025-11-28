@@ -79,6 +79,8 @@ def plot_hist(
 
 
 # ===================================================================== #
+
+
 def general_hist(
     iqshots,
     state_labels,
@@ -95,6 +97,7 @@ def general_hist(
     fid_avg=False,
     fit=False,
     gauss_overlap=False,
+    plotoverlap=False,  # 新增選項
     fitparams=None,
     normalize=True,
     title=None,
@@ -192,6 +195,10 @@ def general_hist(
     popts = []
     pcovs = []
 
+    # Store extracted params for overlap plotting
+    b_g_plot, c_g_plot = None, None
+    b_e_plot, c_e_plot = None, None
+
     # --- 4. Process Each Input State ---
     for check_i, data_check in enumerate(iqshots):
         state_label = state_labels[check_i]
@@ -213,7 +220,6 @@ def general_hist(
 
         # Scatter Plot
         if plot:
-            # Scatter points
             axs[0, 0].scatter(
                 I,
                 Q,
@@ -223,7 +229,6 @@ def general_hist(
                 edgecolor="None",
                 alpha=0.1,
             )
-            # Mean marker
             axs[0, 0].plot(
                 [np.mean(I)],
                 [np.mean(Q)],
@@ -232,8 +237,6 @@ def general_hist(
                 markerfacecolor=this_color,
                 markersize=6,
             )
-
-            # Rotated Scatter
             axs[0, 1].scatter(
                 I_new,
                 Q_new,
@@ -270,7 +273,7 @@ def general_hist(
 
         bins_dist = bins
 
-        # Accumulate for processing
+        # Accumulate
         if check_i in g_states:
             cat = "g"
         elif check_i in e_states:
@@ -284,15 +287,29 @@ def general_hist(
             n_dist[cat] += n
 
     # --- 5. Fitting (Modified) ---
-    # Perform fit if 'fit' is True OR if 'gauss_overlap' is True (requires fit)
-    do_fit = fit or gauss_overlap
+    def gaussian_norm(x, b, c):
+        a = 1 / (np.sqrt(2 * np.pi) * c)
+        return a * np.exp(-((x - b) ** 2) / (2 * c**2))
+
+    def overlap_area_norm(b1, c1, b2, c2):
+        def min_func(x):
+            return np.minimum(gaussian_norm(x, b1, c1), gaussian_norm(x, b2, c2))
+
+        x_min = min(b1 - 5 * c1, b2 - 5 * c2)
+        x_max = max(b1 + 5 * c1, b2 + 5 * c2)
+        area, _ = quad(min_func, x_min, x_max)
+        return area
+
+    def readout_fidelity_norm(b1, c1, b2, c2):
+        return 1 - overlap_area_norm(b1, c1, b2, c2)
+
+    do_fit = fit or gauss_overlap or plotoverlap
 
     if do_fit and n_dist["g"] is not None and n_dist["e"] is not None:
         bin_centers = (bins_dist[:-1] + bins_dist[1:]) / 2
         n_g = n_dist["g"]
         n_e = n_dist["e"]
 
-        # Anchors
         xmax_g_idx = np.argmax(n_g)
         xmax_e_idx = np.argmax(n_e)
         xmax_g_val = bin_centers[xmax_g_idx]
@@ -302,11 +319,9 @@ def general_hist(
         if sigma_guess < 1e-3:
             sigma_guess = (bins_dist[-1] - bins_dist[0]) / 20.0
 
-        # Logic: If overlap is True -> Double Gaussian. Else -> Single Gaussian.
         if gauss_overlap:
             # --- DOUBLE GAUSSIAN FIT ---
             fit_func = double_gaussian
-
             guess_g = [
                 np.max(n_g),
                 xmax_g_val,
@@ -324,49 +339,59 @@ def general_hist(
                 sigma_guess,
             ]
 
-            popt_g, pcov_g = fit_doublegauss(bin_centers, n_g, guess_g)
-            popt_e, pcov_e = fit_doublegauss(bin_centers, n_e, guess_e)
+            try:
+                popt_g, pcov_g = fit_doublegauss(bin_centers, n_g, guess_g)
+                popt_e, pcov_e = fit_doublegauss(bin_centers, n_e, guess_e)
 
-            # Calc Overlap for Double Gaussian
-            def make_norm_pdf(popt):
-                area = (popt[0] * abs(popt[2]) + popt[3] * abs(popt[5])) * np.sqrt(
-                    2 * np.pi
-                )
-                return lambda x: double_gaussian(x, *popt) / area
+                # Extract main peak
+                if popt_g[0] > popt_g[3]:
+                    b_g, c_g = popt_g[1], abs(popt_g[2])
+                else:
+                    b_g, c_g = popt_g[4], abs(popt_g[5])
 
-            pdf_g = make_norm_pdf(popt_g)
-            pdf_e = make_norm_pdf(popt_e)
+                if popt_e[0] > popt_e[3]:
+                    b_e, c_e = popt_e[1], abs(popt_e[2])
+                else:
+                    b_e, c_e = popt_e[4], abs(popt_e[5])
 
-            def overlap_func(x):
-                return np.minimum(pdf_g(x), pdf_e(x))
+                gauss_fit_fidelity = readout_fidelity_norm(b_g, c_g, b_e, c_e)
+                popts = [popt_g, popt_e]
+                pcovs = [pcov_g, pcov_e]
 
-            mu_min = min(xmax_g_val, xmax_e_val)
-            mu_max = max(xmax_g_val, xmax_e_val)
-            overlap_area, _ = quad(
-                overlap_func, mu_min - 10 * sigma_guess, mu_max + 10 * sigma_guess
-            )
-            gauss_fit_fidelity = 1 - overlap_area
+                # Save for plotting
+                b_g_plot, c_g_plot = b_g, c_g
+                b_e_plot, c_e_plot = b_e, c_e
+
+            except Exception as e:
+                print(f"Double Gaussian fit failed: {e}")
+                gauss_fit_fidelity = 0
+                popt_g, popt_e = None, None
 
         else:
             # --- SINGLE GAUSSIAN FIT ---
             fit_func = gaussian
-
-            # Guess structure: [amp, mu, sigma, offset]
             guess_g = [np.max(n_g), xmax_g_val, sigma_guess, 0]
             guess_e = [np.max(n_e), xmax_e_val, sigma_guess, 0]
 
-            popt_g, pcov_g = fit_gauss(bin_centers, n_g, guess_g)
-            popt_e, pcov_e = fit_gauss(bin_centers, n_e, guess_e)
+            try:
+                popt_g, pcov_g = fit_gauss(bin_centers, n_g, guess_g)
+                popt_e, pcov_e = fit_gauss(bin_centers, n_e, guess_e)
+                popts = [popt_g, popt_e]
+                pcovs = [pcov_g, pcov_e]
 
-        popts = [popt_g, popt_e]
-        pcovs = [pcov_g, pcov_e]
+                # Extract simple gaussian params for overlap plot if requested
+                b_g_plot, c_g_plot = popt_g[1], abs(popt_g[2])
+                b_e_plot, c_e_plot = popt_e[1], abs(popt_e[2])
 
-        if plot:
+            except Exception as e:
+                print(f"Gaussian fit failed: {e}")
+                popt_g, popt_e = None, None
+
+        if plot and popt_g is not None and popt_e is not None:
             x_dense = np.linspace(bins_dist[0], bins_dist[-1], 500)
             y_fit_g = fit_func(x_dense, *popt_g)
             y_fit_e = fit_func(x_dense, *popt_e)
 
-            # Use Cycle colors for G and E fit lines (typically index 0 and 1)
             axs[1, 0].plot(
                 x_dense,
                 y_fit_g,
@@ -384,20 +409,25 @@ def general_hist(
                 label="Fit E",
             )
 
-            # Viz overlap only if we did double gaussian analysis
-            if gauss_overlap:
-                total_counts_g = np.sum(n_g)
+            # --- Plot Overlap Area ---
+            if plotoverlap and b_g_plot is not None and b_e_plot is not None:
+                # Reconstruct the single gaussians used for fidelity calculation
+                # Scale them to counts: N_counts = PDF * Total_Counts * Bin_Width
                 bin_width = bins_dist[1] - bins_dist[0]
-                scale_factor = total_counts_g * bin_width
-                y_overlap_viz = overlap_func(x_dense) * scale_factor
+
+                # Scale G
+                norm_g = gaussian_norm(x_dense, b_g_plot, c_g_plot)
+                scaled_g = norm_g * np.sum(n_g) * bin_width
+
+                # Scale E
+                norm_e = gaussian_norm(x_dense, b_e_plot, c_e_plot)
+                scaled_e = norm_e * np.sum(n_e) * bin_width
+
+                # Calculate overlap of these scaled distributions
+                y_overlap = np.minimum(scaled_g, scaled_e)
+
                 axs[1, 0].fill_between(
-                    x_dense,
-                    0,
-                    y_overlap_viz,
-                    color="purple",
-                    alpha=0.3,
-                    label="Overlap Error",
-                    zorder=0,
+                    x_dense, 0, y_overlap, color="purple", alpha=0.3, label="Overlap"
                 )
 
     # --- 6. Thresholds & Confusion Matrix ---
@@ -427,21 +457,16 @@ def general_hist(
 
     # --- Matrix Calculation ---
     if not has_f_state:
-        # 2x2
         matrix_size = 2
         labels = ["|g>", f"|{e_label}>"]
-
         n00 = n_dist["g"][:tind_ge].sum()
         n01 = n_dist["g"][tind_ge:].sum()
         n10 = n_dist["e"][:tind_ge].sum()
         n11 = n_dist["e"][tind_ge:].sum()
-
         raw_matrix = np.array([[n00, n01], [n10, n11]])
     else:
-        # 3x3
         matrix_size = 3
         labels = ["|g>", f"|{e_label}>", "|f>"]
-
         if n_dist["f"] is not None:
             contrast_ef = np.abs(
                 (np.cumsum(n_dist["e"]) - np.cumsum(n_dist["f"]))
@@ -450,7 +475,6 @@ def general_hist(
             tind_ef = contrast_ef.argmax()
             threshold_ef = bins_dist[tind_ef]
             thresholds.append(threshold_ef)
-
             sorted_t_indices = sorted([tind_ge, tind_ef])
             t1, t2 = sorted_t_indices[0], sorted_t_indices[1]
 
@@ -463,7 +487,6 @@ def general_hist(
             row_g = classify_counts(n_dist["g"])
             row_e = classify_counts(n_dist["e"])
             row_f = classify_counts(n_dist["f"])
-
             raw_matrix = np.array([row_g, row_e, row_f])
         else:
             raw_matrix = np.zeros((3, 3))
@@ -490,16 +513,14 @@ def general_hist(
         if ps_threshold is not None:
             axs[1, 0].axvline(ps_threshold, color="gray", linestyle="-.")
 
-        # Re-enable legends
         axs[1, 0].legend(fontsize=8, loc="upper right")
         axs[0, 0].legend(fontsize=8)
         axs[0, 1].legend(fontsize=8)
 
-        # --- Draw Confusion Matrix ---
+        # Confusion Matrix
         ax_cm = axs[1, 1]
         ax_cm.clear()
         im = ax_cm.imshow(conf_matrix, cmap="Reds", vmin=0, vmax=100)
-
         ax_cm.set_xticks(np.arange(matrix_size))
         ax_cm.set_yticks(np.arange(matrix_size))
         ax_cm.set_xticklabels(labels)
@@ -538,7 +559,7 @@ def general_hist(
     else:
         return_data = [fids, thresholds, theta * 180 / np.pi]
 
-    if fit or gauss_overlap:
+    if fit or gauss_overlap or plotoverlap:
         return_data += [popts, pcovs]
 
     if check_qnd:
@@ -571,6 +592,7 @@ def hist(
     fid_avg=False,
     fit=False,
     gauss_overlap=False,
+    plotoverlap=False,
     fitparams=None,
     normalize=True,
     title=None,
@@ -605,6 +627,7 @@ def hist(
         fid_avg=fid_avg,
         fit=fit,
         gauss_overlap=gauss_overlap,
+        plotoverlap=plotoverlap,
         fitparams=fitparams,
         normalize=normalize,
         title=title,
